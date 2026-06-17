@@ -3,15 +3,17 @@
 CC=gcc
 SRC=main.c
 TRG=executavel.out
+FLAGS= -lz # -DPRINT	
 
 all: build
 
 build:
-	$(CC) $(SRC) -o $(TRG)
+	$(CC) $(SRC) $(FLAGS) -o $(TRG)
 
-client:
+client: build
 	./$(TRG) --host
-server:
+
+server: build
 	./$(TRG) --listen
 clean:
 	rm -fr *.out
