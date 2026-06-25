@@ -8,7 +8,7 @@ FLAGS= -lz # -DPRINT
 all: build
 
 build:
-	$(CC) $(SRC) $(FLAGS) -o $(TRG)
+	@$(CC) $(SRC) $(FLAGS) -o $(TRG)
 
 client: build
 	./$(TRG) --host
