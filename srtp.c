@@ -4,7 +4,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include "zlib.h"
-
 #include "srtp.h" // Inclui o seu header para o compilador checar as assinaturas
 
 /*
@@ -79,7 +78,7 @@ int srtp_checksum(uint8_t * data, int size){
 
 /*
  * SRTP_Listen
- *      - Used to receive connection fron outside
+ *      - Used to receive connection fron outside (Infinite Loop waiting for a connection)
  *      - Returns to the user the Window_Size
  *      - 0    - Error
  *      - Else - Correct + Window sent (Window_size must be treated after this step of communication)
@@ -90,6 +89,7 @@ int srtp_listen(int sockfd, struct sockaddr_in *client_addr){
         int len = sizeof(struct sockaddr_in);
         while(1){
                 int n = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct  sockaddr*)client_addr, &len);
+                if(n < 0) continue;
                 pass = (srtp_checksum(buffer, n));
 
                 // Somente para Loop se receber uma mensagem de SYN
@@ -101,16 +101,15 @@ int srtp_listen(int sockfd, struct sockaddr_in *client_addr){
 
 /*
  * SRTP_Connect
- *      - Stabilishes connection with Listenner
- *      - Returns the window_size negotiated
- *      0 - Error
- *      Else - Correct and the window_size (API takes care of window_size for Sender/Host)
+ *      - Stabilishes connection with Listenner (Infinite Loop if never answered)
+ *      - Returns the window_size negotiated when finish 
  */
 int srtp_connect(int sockfd, struct sockaddr_in *server_addr, uint8_t window_size){
         uint8_t * connect_message;
         uint8_t window_size_client = window_size;
         uint8_t window_size_decided;
 
+        struct sockaddr_in from_addr; 
         int len = sizeof(struct sockaddr_in);
 
         struct srtp_header_t connect_header = {
@@ -128,27 +127,38 @@ int srtp_connect(int sockfd, struct sockaddr_in *server_addr, uint8_t window_siz
         #ifdef DEBUG
         printf("> Sending SYN + WindowSize!\n");
         #endif
-        
-        connect_message = srtp_data(connect_header, 0);
-        sendto(sockfd, connect_message, 9,  0, (struct sockaddr*)server_addr, len);
-        free(connect_message);
 
+        uint8_t connected = 0;
         uint8_t buffer[BUFFER_SIZE];
-        uint8_t pass = 0;
 
-        // Waits for SYN+ACK from Receiver
-        #ifdef DEBUG
-        printf("> Waiting for SYN+ACK!\n");
-        #endif
+        struct timeval time_value;
+        time_value.tv_sec = 0;
+        time_value.tv_usec = 100000; //100ms - Fixed time in the specification
+        setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &time_value, sizeof(time_value));
 
-        struct sockaddr_in from_addr; 
+        while(!connected){
+                connect_message = srtp_data(connect_header, 0);
+                sendto(sockfd, connect_message, 9,  0, (struct sockaddr*)server_addr, len);
+                free(connect_message);
 
-        while(1){
+                uint8_t pass = 0;
+                // Waits for SYN+ACK from Receiver
+                #ifdef DEBUG
+                printf("> Waiting for SYN+ACK!\n");
+                #endif
+
                 int n = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct  sockaddr*)&from_addr, &len);
+                if(n < 0){
+                        usleep(200000); //200ms de Sleep para nao floodar com SYN
+                        continue;
+                }
                 pass = (srtp_checksum(buffer, n));
 
-                // Somente para Loop se receber uma mensagem de SYN+ACK
-                if(pass && ((buffer[0] & 0x80) && (buffer[2] & 0x80))) break;        
+
+                // Stops loop after a SYN+ACK Is received
+                if(pass && ((buffer[0] & 0x80) && (buffer[2] & 0x80))){
+                        connected = 1;
+                }        
         }
         
         window_size_decided = buffer[4];
@@ -206,13 +216,16 @@ int srtp_accept(int sockfd, struct sockaddr_in *client_addr, uint8_t window_size
         sendto(sockfd, accept_message, 9,  0, (struct sockaddr*)client_addr, len);
         free(accept_message);
 
-        struct sockaddr_in from_addr; 
+        struct sockaddr_in from_addr;   
         uint8_t buffer[BUFFER_SIZE];
         uint8_t pass = 0;
+
+        int current_tries = 0;
 
         // Waits for ACK from Sender
         while(1){
                 int n = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct  sockaddr*)&from_addr, &len);
+                if(n < 0) continue;
                 pass = (srtp_checksum(buffer, n));
 
                 // Somente para Loop se receber uma mensagem de SYN+ACK
@@ -232,7 +245,7 @@ int srtp_accept(int sockfd, struct sockaddr_in *client_addr, uint8_t window_size
  * 
  * Returns last_seq value in case of success
  */
-int srtp_send(int sockfd, FILE *file, const struct sockaddr_in *dest_addr, uint8_t window_size, int mode){
+int srtp_send(int sockfd_data, int sockfd_ack, FILE *file, const struct sockaddr_in *dest_addr, uint8_t window_size, int mode){
         // First Breaks the FILE in 255 Bytes (for each send)
         uint8_t file_segmenent[255];
         size_t bytes_lidos = 0;
@@ -263,10 +276,10 @@ int srtp_send(int sockfd, FILE *file, const struct sockaddr_in *dest_addr, uint8
                         };
 
                         uint8_t * data_segmenet = srtp_data(segement_header, file_segmenent);
-                        sendto(sockfd, data_segmenet, 9 + segement_header.length, 0, (struct sockaddr*)dest_addr, len);
+                        sendto(sockfd_data, data_segmenet, 9 + segement_header.length, 0, (struct sockaddr*)dest_addr, len);
                         free(data_segmenet);
 
-                        n = recvfrom(sockfd, response, 9, 0, (struct sockaddr *)dest_addr, &len);
+                        n = recvfrom(sockfd_ack, response, 9, 0, (struct sockaddr *)dest_addr, &len);
                         checksum_b = srtp_checksum(response, n);
 
                         if(checksum_b){
@@ -298,7 +311,7 @@ int srtp_send(int sockfd, FILE *file, const struct sockaddr_in *dest_addr, uint8
  * 0 - Success
  * 1 - Timeout? (Must Implement) 
  */
-int srtp_close(int sockfd, struct sockaddr_in * dest_addr, uint16_t last_seq_count){
+int srtp_close(int sockfd_data, int sockfd_ack, struct sockaddr_in * dest_addr, uint16_t last_seq_count){
         // Sends a transmission informing that data is over
         int len = sizeof(struct sockaddr_in);
         
@@ -324,10 +337,10 @@ int srtp_close(int sockfd, struct sockaddr_in * dest_addr, uint16_t last_seq_cou
         uint8_t close_confirmed = 0;
         while(!close_confirmed){
                 uint8_t * finish_data = srtp_data(fin_header, 0);
-                sendto(sockfd, finish_data, 9, 0, (struct sockaddr*)dest_addr, len);
+                sendto(sockfd_data, finish_data, 9, 0, (struct sockaddr*)dest_addr, len);
                 free(finish_data);
 
-                n = recvfrom(sockfd, response, 9, 0, (struct sockaddr *)dest_addr, &len);
+                n = recvfrom(sockfd_ack, response, 9, 0, (struct sockaddr *)dest_addr, &len);
                 if(n < 0) continue;
                 checksum_b = srtp_checksum(response, n);
                 if(checksum_b){
@@ -351,7 +364,7 @@ int srtp_close(int sockfd, struct sockaddr_in * dest_addr, uint16_t last_seq_cou
 /* 
  * API Function used to receive FILE from another Host (and to write in a output file)
  */
-int srtp_receive(int sockfd, FILE * file_output, struct sockaddr_in * source_addr, uint8_t window_size, int mode){
+int srtp_receive(int sockfd_data, uint16_t port_in, FILE * file_output, struct sockaddr_in * source_addr, uint8_t window_size, int mode){
         uint8_t receive_buffer[BUFFER_SIZE];
         uint16_t file_counter = 0;
         uint16_t last_file_counter = 0; // Used in SRTP_Close
@@ -363,7 +376,8 @@ int srtp_receive(int sockfd, FILE * file_output, struct sockaddr_in * source_add
         int len = sizeof(struct sockaddr_in);
 
         while(1){
-                n = recvfrom(sockfd, receive_buffer, BUFFER_SIZE, 0, (struct sockaddr *)source_addr, &len);
+                len = sizeof(struct sockaddr_in);
+                n = recvfrom(sockfd_data, receive_buffer, BUFFER_SIZE, 0, (struct sockaddr *)source_addr, &len);
                 if(n < 0) continue;
 
                 check = srtp_checksum(receive_buffer, n);
@@ -385,6 +399,9 @@ int srtp_receive(int sockfd, FILE * file_output, struct sockaddr_in * source_add
 
                         uint8_t payload_len = receive_buffer[4];
 
+                        // Ack forced on P+1
+                        source_addr->sin_port = htons(port_in + 1);
+
                         // Correct Send Process
                         if((file_counter) == seq_counter){
                                 header.ack_flag = 1;
@@ -395,7 +412,7 @@ int srtp_receive(int sockfd, FILE * file_output, struct sockaddr_in * source_add
                                 }
 
                                 response_to_otherside = srtp_data(header, 0); //No Payload since its a response
-                                sendto(sockfd, response_to_otherside, 9, 0, (struct sockaddr *)source_addr, len);
+                                sendto(sockfd_data, response_to_otherside, 9, 0, (struct sockaddr *)source_addr, len);
                                 free(response_to_otherside);
 
                                 // Send ACK
@@ -412,7 +429,7 @@ int srtp_receive(int sockfd, FILE * file_output, struct sockaddr_in * source_add
                                 // Incorrect ! Send NACK and Repeat process
                                 header.nack = 1;
                                 response_to_otherside = srtp_data(header, 0); //No Payload since its a response
-                                sendto(sockfd, response_to_otherside, 9, 0, (struct sockaddr *)source_addr, len);
+                                sendto(sockfd_data, response_to_otherside, 9, 0, (struct sockaddr *)source_addr, len);
                                 free(response_to_otherside);
                         }
                 }
@@ -430,8 +447,11 @@ int srtp_receive(int sockfd, FILE * file_output, struct sockaddr_in * source_add
                 .crc32 = 0
         };
 
+        // Forces ACK to Port P+1
+        source_addr->sin_port = htons(port_in + 1);
+
         uint8_t * finish_communication = srtp_data(finish_header, 0);
-        sendto(sockfd, finish_communication, 9, 0, (struct sockaddr *)source_addr, len);
+        sendto(sockfd_data, finish_communication, 9, 0, (struct sockaddr *)source_addr, len);
         free(finish_communication);
 
         #ifdef DEBUG

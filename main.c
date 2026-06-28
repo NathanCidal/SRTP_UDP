@@ -44,9 +44,14 @@ int interface_listen(uint16_t port_in, uint8_t protocol_mode){
         close(listenfd);
     }
 
+
+    int sockfd_data = listenfd;
+    int sockfd_ack = 0;
+
     FILE * fp = fopen("output_file.txt", "w+");
-    srtp_receive(listenfd, fp, &servaddr, window_size_stabilished, 0);
-    close(listenfd);
+    srtp_receive(sockfd_data, port_in, fp, &servaddr, window_size_stabilished, 0);
+    close(sockfd_data);
+    return 0;
 }
 
 int interface_host(uint16_t port_in, uint8_t protocol_mode, char * ip, char * file_name){
@@ -79,20 +84,46 @@ int interface_host(uint16_t port_in, uint8_t protocol_mode, char * ip, char * fi
     printf("> Stabilished Window: %d\n", window_size_stablished);
     #endif
 
-    FILE * fp = fopen(file_name, "r");
-    if(!fp){
-        printf("! Error ! - Input File Missing\n");
-        srtp_close(sockfd, &servaddr, 0);
+
+    // Communication Process with Dual-Port
+    int sockfd_data = sockfd;
+    int sockfd_ack = socket(AF_INET, SOCK_DGRAM, 0);
+
+    struct sockaddr_in local_ack_addr;
+    bzero(&local_ack_addr, sizeof(local_ack_addr));
+    local_ack_addr.sin_family = AF_INET;
+    local_ack_addr.sin_addr.s_addr = htonl(INADDR_ANY); 
+    local_ack_addr.sin_port = htons(port_in + 1);       
+
+    if (bind(sockfd_ack, (struct sockaddr*)&local_ack_addr, sizeof(local_ack_addr)) < 0) {
+        perror("! Erro ! Binding Error on P+1 on Sender");
         close(sockfd);
+        close(sockfd_ack);
         return 1;
     }
 
-    uint16_t count = srtp_send(sockfd, fp, &servaddr, window_size_stablished, 0);
+    // Configurate Socket to have support for Timeouts
+    struct timeval time_value;
+    time_value.tv_sec = 0;
+    time_value.tv_usec = 100000; //100ms - Fixed time in the specification
+    setsockopt(sockfd_ack, SOL_SOCKET, SO_RCVTIMEO, &time_value, sizeof(time_value));
+
+    FILE * fp = fopen(file_name, "r");
+    if(!fp){
+        printf("! Error ! - Input File Missing\n");
+        srtp_close(sockfd_data, sockfd_ack, &servaddr, 0);
+        close(sockfd_ack);
+        close(sockfd_data);
+        return 1;
+    }
+
+    uint16_t count = srtp_send(sockfd_data, sockfd_ack, fp, &servaddr, window_size_stablished, 0);
     fclose(fp);
 
     // Finalizes Communication
-    srtp_close(sockfd, &servaddr, count);
+    srtp_close(sockfd_data, sockfd_ack, &servaddr, count);
     close(sockfd);
+    close(sockfd_ack);
     return 0;
 }
 

@@ -7,7 +7,7 @@ INCLUDE=srtp.h
 TRG=executavel.out
 
 PORT=6000
-FILE_NAME=arquivo.txt
+FILE_NAME=test_input_01.txt
 IP=127.0.0.1
 
 all: build
