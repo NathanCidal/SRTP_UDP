@@ -2,19 +2,17 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "parser.h"
 #include "srtp.h"
 
-#define PORT 5000
-#define MAXLINE 1000
-
-void interface_listen(){
+int interface_listen(uint16_t port_in, uint8_t protocol_mode){
     struct sockaddr_in servaddr, cliaddr;
     bzero(&servaddr, sizeof(servaddr));
 
     int listenfd, len;
     listenfd = socket(AF_INET, SOCK_DGRAM, 0);        
     servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
-    servaddr.sin_port = htons(PORT);
+    servaddr.sin_port = htons(port_in);
     servaddr.sin_family = AF_INET; 
     bind(listenfd, (struct sockaddr*)&servaddr, sizeof(servaddr));  
     len = sizeof(cliaddr);
@@ -23,23 +21,22 @@ void interface_listen(){
     uint8_t window_size_client = 255;
 
     #ifdef DEBUG
-    printf("> Comecando o SRTP_Listen!\n");
+    printf("> Begin - SRTP_Listen!\n");
     #endif
 
     window_size_client = srtp_listen(listenfd, &servaddr);
     if(window_size_client < window_size_stabilished) window_size_stabilished = window_size_client;
 
     #ifdef DEBUG
-    printf("> Janela estabelecida: %d\n", window_size_stabilished);
-    printf("> SRTP Listen Concluido!\n");
-    printf("> Comecando o SRTP Accept\n");
+    printf("> Stabilished Window: %d\n", window_size_stabilished);
+    printf("> Begin - SRTP_Accept\n");
     #endif
 
     int verify = 0;
     verify = srtp_accept(listenfd, &servaddr, window_size_stabilished);
 
     #ifdef DEBUG
-    printf("> SRTP Accept Concluido!\n");
+    printf("> End - SRTP_Accept!\n");
     #endif
 
     if(!verify){
@@ -47,16 +44,18 @@ void interface_listen(){
         close(listenfd);
     }
 
+    FILE * fp = fopen("output_file.txt", "w+");
+    srtp_receive(listenfd, fp, &servaddr, window_size_stabilished, 0);
     close(listenfd);
 }
 
-void interface_host(){
+int interface_host(uint16_t port_in, uint8_t protocol_mode, char * ip, char * file_name){
     int sockfd;
     struct sockaddr_in servaddr;
     
     bzero(&servaddr, sizeof(servaddr));
-    servaddr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    servaddr.sin_port = htons(PORT);
+    servaddr.sin_addr.s_addr = inet_addr(ip);
+    servaddr.sin_port = htons(port_in);
     servaddr.sin_family = AF_INET;
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     
@@ -71,38 +70,73 @@ void interface_host(){
     uint8_t window_size_stablished = 55;
 
     #ifdef DEBUG
-    printf("> Comecando o Connect!\n");
+    printf("> Begin SRTP_Connect!\n");
     #endif
     
     window_size_stablished = srtp_connect(sockfd, &servaddr, window_size_desired);
 
     #ifdef DEBUG
-    printf("> Janela estabelecida: %d\n", window_size_stablished);
+    printf("> Stabilished Window: %d\n", window_size_stablished);
     #endif
 
-    FILE * fp = fopen("arquivo.txt", "r");
-    srtp_send(sockfd, fp, &servaddr, window_size_stablished, 0);
+    FILE * fp = fopen(file_name, "r");
+    if(!fp){
+        printf("! Error ! - Input File Missing\n");
+        srtp_close(sockfd, &servaddr, 0);
+        close(sockfd);
+        return 1;
+    }
+
+    uint16_t count = srtp_send(sockfd, fp, &servaddr, window_size_stablished, 0);
     fclose(fp);
 
-    // End of Communication
+    // Finalizes Communication
+    srtp_close(sockfd, &servaddr, count);
     close(sockfd);
+    return 0;
 }
 
 int main(int argc, char * argv[]){
-        // --listen -> Cant be host
-        // --port -> Default, must be used for both, i guess?
-        // --file (only on sender, its half-duplex)
-        // --host (ip) != listenner
+        uint8_t error_detected = 0;
+        uint8_t * parameters = parser_worker(argc, argv);
+        error_detected = parser_error_detector(parameters);
 
-        if(argc >= 2){  
-            if(strcmp(argv[1], "--host") == 0){
-                printf("Host!\n");
-                interface_host();
-            }
-            if(strcmp(argv[1], "--listen") == 0){
-                printf("Listen!\n");
-                interface_listen();
-            }
+        if(error_detected){
+            free(parameters);
+            return 1;
+        }
+
+        // Decides the Operation Mode
+        uint8_t execution_mode = 1; // Stop and Wait (By Default)
+        if(parameters[MODE_P]){
+            if(parameters[SAW_P]) execution_mode = 1;
+            if(parameters[GBN_P]) execution_mode = 2;
+            if(parameters[SR_P])  execution_mode = 3;
+        }
+
+        uint8_t listen_mode = 0;
+        uint8_t host_mode   = 0;
+        if(parameters[LISTEN_P]) listen_mode = 1;
+        if(parameters[HOST_P]) host_mode = 1;
+
+        uint16_t port_value = 0;
+        if(parameters[PORT_VAL_P]) port_value = (uint16_t)atoi(argv[parameters[PORT_VAL_P]]);
+
+        char ip_port[BUFFER_SIZE];
+        if(parameters[IP_P]) strcpy(ip_port, argv[parameters[IP_P]]);
+
+        char file_name[BUFFER_SIZE];
+        if(parameters[FILE_NAME_P]) strcpy(file_name, argv[parameters[FILE_NAME_P]]);
+
+        if(host_mode)
+        {
+            printf("> Host Application!\n");
+            interface_host(port_value, execution_mode, ip_port, file_name);
+        }
+        else if(listen_mode)
+        {
+            printf("> Listen Application!\n");
+            interface_listen(port_value, execution_mode);
         }
 
         return 0;

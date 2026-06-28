@@ -104,6 +104,6 @@ int srtp_send(int sockfd, FILE *file, const struct sockaddr_in *dest_addr, uint8
 int srtp_receive(int sockfd, FILE * file_output, struct sockaddr_in * source_addr, uint8_t window_size, int mode);
 
 // Communication Finish Handshake
-int srtp_close(int sockfd, struct sockaddr_in *dest_addr, int listenner);
+int srtp_close(int sockfd, struct sockaddr_in *dest_addr, uint16_t last_seq_count);
 
 #endif
