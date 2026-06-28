@@ -185,7 +185,6 @@ int srtp_connect(int sockfd, struct sockaddr_in *server_addr, uint8_t window_siz
  * Returns 0 in case of timeout                 (Not Implemented)
  * Return 1 in case of correct connection
  */
-
 int srtp_accept(int sockfd, struct sockaddr_in *client_addr, uint8_t window_size){
         uint8_t * accept_message;
         uint8_t window_size_listen = window_size;
@@ -231,16 +230,71 @@ int srtp_accept(int sockfd, struct sockaddr_in *client_addr, uint8_t window_size
  * 1 - GBN (Go Back N)
  * 2 - SR  (Selective Repeat)
  */
-int srtp_send(int sockfd, FILE *file, const struct sockaddr_in *dest_addr, int window_size, int mode){
+int srtp_send(int sockfd, FILE *file, const struct sockaddr_in *dest_addr, uint8_t window_size, int mode){
         // First Breaks the FILE in 255 Bytes (for each send)
         uint8_t file_segmenent[255];
-        int current_pos = 0;
-        while(fgets(file_segmenent, 255, file)){
-                current_pos++;
+        size_t bytes_lidos = 0;
+        uint16_t current_pos = 0;
+        int len = sizeof(struct sockaddr_in);
+
+        // Enquanto tem como segementar o arquivo em 255 Bytes, e segmentado.
+        while((bytes_lidos = fread(file_segmenent, 1, 255, file)) > 0){
+                struct srtp_header_t segement_header = {
+                        .syn = 0,
+                        .fin = 0,
+                        .seq = current_pos,
+                        .nack = 0,
+                        .ack_num = 0,
+                        .length = (uint8_t)bytes_lidos,
+                        .crc32 = 0 
+                };
+
+                uint8_t * data_segmenet = srtp_data(segement_header, file_segmenent);
+                sendto(sockfd, data_segmenet, 9 + segement_header.length, 0, (struct sockaddr*)dest_addr, len);
+                free(data_segmenet);
+
                 for(int i = 0; i < 255; i++){
                         printf("%c", file_segmenent[i]);
+                }
+
+                // Limpo o buffer de envio por garantia
+                for(int i = 0; i < 255; i++){
+                        file_segmenent[i] = 0;
                 }
         }
 
         return 0;
+}
+
+/* 
+ * API Function used to receive FILE from another Host (and to write in a output file)
+ */
+int srtp_receive(int sockfd, FILE * file_output, struct sockaddr_in * source_addr, uint8_t window_size, int mode){
+        uint8_t receive_buffer[BUFFER_SIZE];
+        uint16_t file_counter = 0;
+        uint16_t seq_counter = 0;
+
+        uint8_t * response_to_otherside;
+        int n = 0;
+        int check = 0;
+        while(1){
+                n = recvfrom(sockfd, receive_buffer, BUFFER_SIZE, 0, (struct sockaddr *)source_addr, sizeof(struct sockaddr_in));
+                check = srtp_checksum(receive_buffer, n);
+                
+                if(check){
+                        seq_counter = (receive_buffer[0] & 0x3F) << 8;
+                        seq_counter |= receive_buffer[1]; 
+
+                        // Correct Send Process
+                        if((file_counter+1) == seq_counter){
+                                for(int i = 9; i < receive_buffer[4]; i++){
+                                        fprintf(file_output, "%c", receive_buffer[i]);
+                                }
+                                file_counter++;
+                        }else{
+                        // Incorrect ! Send NACK and Repeat process
+                        break;
+                        }
+                }
+        }
 }

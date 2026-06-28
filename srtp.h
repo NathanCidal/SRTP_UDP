@@ -99,10 +99,11 @@ int srtp_listen(int sockfd, struct sockaddr_in *client_addr);
 int srtp_connect(int sockfd, struct sockaddr_in *server_addr, uint8_t window_size);
 int srtp_accept(int sockfd, struct sockaddr_in *client_addr, uint8_t window_size);
 
-// Pega o fd de um arquivo, segmenta ele e vai enviando
-int srtp_send(int sockfd, FILE *file, const struct sockaddr_in *dest_addr, int window_size, int mode);
+// Process of communication
+int srtp_send(int sockfd, FILE *file, const struct sockaddr_in *dest_addr, uint8_t window_size, int mode);
+int srtp_receive(int sockfd, FILE * file_output, struct sockaddr_in * source_addr, uint8_t window_size, int mode);
 
-// Recebe como parametro identificar se e SENDER ou RECEIVER
+// Communication Finish Handshake
 int srtp_close(int sockfd, struct sockaddr_in *dest_addr, int listenner);
 
 #endif
