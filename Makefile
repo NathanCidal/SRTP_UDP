@@ -1,9 +1,10 @@
 # Makefile de Exemplo de Aplicacao UDP
 
 CC=gcc
-SRC=main.c
+FLAGS= -lz -DDEBUG	
+SRC=main.c srtp.c
+INCLUDE=srtp.h
 TRG=executavel.out
-FLAGS= -lz # -DPRINT	
 
 all: build
 
