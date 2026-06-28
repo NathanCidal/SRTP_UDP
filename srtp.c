@@ -87,10 +87,9 @@ int srtp_checksum(uint8_t * data, int size){
 int srtp_listen(int sockfd, struct sockaddr_in *client_addr){
         uint8_t buffer[BUFFER_SIZE];
         uint8_t pass = 0;
-        struct sockaddr_in from_addr; 
         int len = sizeof(struct sockaddr_in);
         while(1){
-                int n = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct  sockaddr*)&from_addr, &len);
+                int n = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct  sockaddr*)client_addr, &len);
                 pass = (srtp_checksum(buffer, n));
 
                 // Somente para Loop se receber uma mensagem de SYN
@@ -222,4 +221,26 @@ int srtp_accept(int sockfd, struct sockaddr_in *client_addr, uint8_t window_size
         }
 
         return 1;
+}
+
+/*
+ * API Function used to send FILE to another Host
+ *
+ * Modes:
+ * 0 - SaW (Stop and Wait) - Uses at max 1 of Window Size
+ * 1 - GBN (Go Back N)
+ * 2 - SR  (Selective Repeat)
+ */
+int srtp_send(int sockfd, FILE *file, const struct sockaddr_in *dest_addr, int window_size, int mode){
+        // First Breaks the FILE in 255 Bytes (for each send)
+        uint8_t file_segmenent[255];
+        int current_pos = 0;
+        while(fgets(file_segmenent, 255, file)){
+                current_pos++;
+                for(int i = 0; i < 255; i++){
+                        printf("%c", file_segmenent[i]);
+                }
+        }
+
+        return 0;
 }

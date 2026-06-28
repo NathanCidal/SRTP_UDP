@@ -79,7 +79,11 @@ void interface_host(){
     #ifdef DEBUG
     printf("> Janela estabelecida: %d\n", window_size_stablished);
     #endif
-    
+
+    FILE * fp = fopen("arquivo.txt", "r");
+    srtp_send(sockfd, fp, &servaddr, window_size_stablished, 0);
+    fclose(fp);
+
     // End of Communication
     close(sockfd);
 }
