@@ -46,7 +46,6 @@ int interface_listen(uint16_t port_in, uint8_t protocol_mode){
 
 
     int sockfd_data = listenfd;
-    int sockfd_ack = 0;
 
     FILE * fp = fopen("output_file.txt", "w+");
     srtp_receive(sockfd_data, port_in, fp, &servaddr, window_size_stabilished, 0);
@@ -158,6 +157,8 @@ int main(int argc, char * argv[]){
 
         char file_name[BUFFER_SIZE];
         if(parameters[FILE_NAME_P]) strcpy(file_name, argv[parameters[FILE_NAME_P]]);
+
+        free(parameters);
 
         if(host_mode)
         {
