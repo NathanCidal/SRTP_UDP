@@ -22,3 +22,4 @@ server: build
 	./$(TRG) --listen --port $(PORT)
 clean:
 	rm -fr *.out
+	rm -fr output_file.txt
