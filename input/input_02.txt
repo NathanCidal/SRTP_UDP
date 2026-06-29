@@ -1,0 +1,107 @@
+Trechos retirados diretamente do Enunciado para gerar pacotes como Input:
+
+##############################################################################
+O que deve aparecer no relatório:
+
+1. Análise comparativa sob latência: comparar o throughput de stop-and-wait, GBN
+e SR nos cenários L0–L3. Explicar por que a janela deslizante muda o impacto da
+latência no throughput.
+
+2. Análise comparativa sob perda: comparar o número de retransmissões e o
+throughput de GBN e SR nos cenários P1–P4. Explicar a diferença de
+comportamento entre os dois protocolos sob perda e relacionar com o mecanismo
+de retransmissão de cada um.
+
+3. Análise comparativa sob reordenação: este é o ponto central da Parte 2. Para
+cada cenário R0–R2, descrever e comparar o comportamento de GBN e SR. As
+capturas Wireshark devem mostrar claramente: no GBN, o descarte e a
+retransmissão em lote após pacotes fora de ordem; no SR, a bufferização e a
+entrega em ordem após preenchimento de lacunas. Explicar por que os dois
+protocolos divergem neste cenário.
+
+4. Análise do impacto do tamanho de janela: para cada protocolo, comparar os
+resultados obtidos com os dois tamanhos de janela testados. Discutir o trade-off
+entre janela maior (maior throughput potencial) e janela maior (maior custo de
+retransmissão no GBN sob perda).
+
+5. Conclusão comparativa: síntese das três implementações: em quais condições
+de rede cada uma é mais adequada e por quê. A conclusão deve ser fundamentada
+nos dados medidos, não apenas na teoria.
+
+##############################################################################
+Teste de Interoperabilidade
+
+Durante a apresentação, cada grupo realizará um teste de transmissão com outro grupo,
+usando as implementações de ambos os grupos. O teste consiste em:
+
+- Sender de um grupo conectando ao receiver do outro grupo, e vice-versa.
+- Transferência de um arquivo.
+- O teste é considerado bem-sucedido se o arquivo transferido for idêntico ao original
+(verificado por hash).
+
+O teste de interoperabilidade avalia a conformidade da implementação com a
+especificação do protocolo.
+
+##############################################################################
+Resultado e Entrega
+
+Regras de Entrega
+• Grupo: grupos de até 3 alunos.
+• Data de entrega: 29/06 no Moodle
+• Formato: arquivo .zip contendo:
+- Código-fonte da implementação (sem binários, arquivos temporários ou de
+build).
+- Arquivo README com instruções de compilação/execução e descrição dos
+argumentos de linha de comando.
+- Diretório capturas/ com os arquivos .pcapng de todos obrigatórios,
+nomeados de acordo com o cenário (ex: saw_L2.pcapng, sr_R2_janela16.pcapng).
+- Relatório em PDF, documento único cobrindo Parte 1 e Parte 2 (até 5
+páginas).
+
+•Apresentação: 29/06 e 06/07
+
+•Observações Gerais: É importante que todos os integrantes dos grupos
+estejam aptos a apresentarem o trabalho a partir do início da aula. Para
+a entrega, é esperado que apenas um dos integrantes envie pelo Moodle, até
+a data e hora especificadas, um arquivo .zip com os nomes dos
+integrantes.
+
+•IMPORTANTE: Não serão aceitos trabalhos entregues fora do prazo.
+Trabalhos que não compilam ou que não executam não serão avaliados. Todos
+os trabalhos serão analisados e comparados. Caso seja identificada cópia de
+trabalhos, todos os trabalhos envolvidos receberão nota Zero. O uso de código
+gerado por LLM sem compreensão demonstrada na apresentação resultará em
+nota zero para o grupo.
+
+##############################################################################
+Avaliação
+
+Item                                                          Peso
+Parte 1 — Implementação stop-and-wait                          20%
+--------------------------------------------------------------------
+Conformidade com a especificação do protocolo (cabeçalho, handshake,
+encerramento, CRC32)                                           10%
+Funcionamento correto da transferência (sem e com clumsy)      10%
+
+Parte 1 — Relatório                                            20%
+--------------------------------------------------------------------
+Análise do throughput teórico vs medido                         7%
+Análise dos cenários de latência com evidência em capturas      7%
+Análise dos cenários de perda com evidência em capturas         6%
+
+Parte 2 — Implementação GBN e SR                               20%
+--------------------------------------------------------------------
+Conformidade com a especificação (GBN e SR)                    10%
+Funcionamento correto da transferência (sem e com clumsy)      10%
+
+Parte 2 — Relatório                                            30%
+--------------------------------------------------------------------
+Análise do throughput teórico vs medido para GBN e SR           5%
+Análise comparativa sob latência e perda                        8%
+Análise comparativa sob reordenação (com evidência em capturas)10%
+Conclusão comparativa fundamentada em dados                     7%
+
+Teste de interoperabilidade ao vivo                            10%
+--------------------------------------------------------------------
+Sender do grupo funciona com receiver de outro grupo            5%
+Receiver do grupo funciona com sender de outro grupo            5%

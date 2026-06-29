@@ -5,7 +5,7 @@
 #include "parser.h"
 #include "srtp.h"
 
-int interface_listen(uint16_t port_in, uint8_t protocol_mode){
+int interface_listen(uint16_t port_in, uint8_t protocol_mode, uint16_t window_size){
     struct sockaddr_in servaddr, cliaddr;
     bzero(&servaddr, sizeof(servaddr));
 
@@ -17,7 +17,7 @@ int interface_listen(uint16_t port_in, uint8_t protocol_mode){
     bind(listenfd, (struct sockaddr*)&servaddr, sizeof(servaddr));  
     len = sizeof(cliaddr);
 
-    uint8_t window_size_stabilished = 39;
+    uint8_t window_size_stabilished = window_size;
     uint8_t window_size_client = 255;
 
     #ifdef DEBUG
@@ -48,12 +48,12 @@ int interface_listen(uint16_t port_in, uint8_t protocol_mode){
     int sockfd_data = listenfd;
 
     FILE * fp = fopen("output_file.txt", "w+");
-    srtp_receive(sockfd_data, port_in, fp, &servaddr, window_size_stabilished, 0);
+    srtp_receive(sockfd_data, port_in, fp, &servaddr, window_size_stabilished, protocol_mode);
     close(sockfd_data);
     return 0;
 }
 
-int interface_host(uint16_t port_in, uint8_t protocol_mode, char * ip, char * file_name){
+int interface_host(uint16_t port_in, uint8_t protocol_mode, char * ip, char * file_name, uint16_t window_size){
     int sockfd;
     struct sockaddr_in servaddr;
     
@@ -70,7 +70,7 @@ int interface_host(uint16_t port_in, uint8_t protocol_mode, char * ip, char * fi
         exit(0);
     }
 
-    uint8_t window_size_desired = 35;
+    uint8_t window_size_desired = window_size;
     uint8_t window_size_stablished = 55;
 
     #ifdef DEBUG
@@ -83,8 +83,7 @@ int interface_host(uint16_t port_in, uint8_t protocol_mode, char * ip, char * fi
     printf("> Stabilished Window: %d\n", window_size_stablished);
     #endif
 
-
-    // Communication Process with Dual-Port
+    // Communication Process with Dual-Port 
     int sockfd_data = sockfd;
     int sockfd_ack = socket(AF_INET, SOCK_DGRAM, 0);
 
@@ -116,7 +115,7 @@ int interface_host(uint16_t port_in, uint8_t protocol_mode, char * ip, char * fi
         return 1;
     }
 
-    uint16_t count = srtp_send(sockfd_data, sockfd_ack, fp, &servaddr, window_size_stablished, 0);
+    uint16_t count = srtp_send(sockfd_data, sockfd_ack, fp, &servaddr, window_size_stablished, protocol_mode);
     fclose(fp);
 
     // Finalizes Communication
@@ -158,17 +157,22 @@ int main(int argc, char * argv[]){
         char file_name[BUFFER_SIZE];
         if(parameters[FILE_NAME_P]) strcpy(file_name, argv[parameters[FILE_NAME_P]]);
 
+        uint16_t window_size = 1;
+        if(parameters[SIZE_VAL_P]) window_size = atoi(argv[parameters[SIZE_VAL_P]]);
+        if(window_size > 0x3FFF) window_size = 0x3FFF;
+        if(window_size == 0) window_size = 1;
+
         free(parameters);
 
         if(host_mode)
         {
             printf("> Host Application!\n");
-            interface_host(port_value, execution_mode, ip_port, file_name);
+            interface_host(port_value, execution_mode, ip_port, file_name, window_size);
         }
         else if(listen_mode)
         {
             printf("> Listen Application!\n");
-            interface_listen(port_value, execution_mode);
+            interface_listen(port_value, execution_mode, window_size);
         }
 
         return 0;

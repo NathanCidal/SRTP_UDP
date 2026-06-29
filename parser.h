@@ -20,6 +20,8 @@
 #define SAW_P        8
 #define GBN_P        9
 #define SR_P        10
+#define SIZE_P      11
+#define SIZE_VAL_P  12
 
 uint8_t * parser_worker(int argc, char * argv[]);
 
@@ -28,6 +30,7 @@ uint8_t parameters_amount(uint8_t * parameters);
 uint8_t file_missing(uint8_t * parameters);
 uint8_t port_missing(uint8_t * parameters);
 uint8_t incorrect_modes(uint8_t * parameters);
+uint8_t missing_size(uint8_t * parameters);
 uint8_t parser_error_detector(uint8_t * parameters);
 
 #endif
