@@ -669,13 +669,20 @@ int srtp_close(int sockfd_data, int sockfd_ack, struct sockaddr_in * dest_addr, 
 
         uint8_t response[9];
         uint8_t close_confirmed = 0;
+        int timeout = 0;
         while(!close_confirmed){
+                if(timeout == MAX_TRIES) break;
+
                 uint8_t * finish_data = srtp_data(fin_header, 0);
                 sendto(sockfd_data, finish_data, 9, 0, (struct sockaddr*)dest_addr, len);
                 free(finish_data);
 
                 n = recvfrom(sockfd_ack, response, 9, 0, (struct sockaddr *)dest_addr, &len);
-                if(n < 0) continue;
+                if(n < 0){
+                        usleep(100000); // 100ms Sleep
+                        timeout++; 
+                        continue; 
+                }
                 checksum_b = srtp_checksum(response, n);
                 if(checksum_b){
                         uint8_t fin_flag = (response[0] & 0x40) == 0x40; 
