@@ -51,8 +51,6 @@ int interface_listen(uint16_t port_in, uint8_t protocol_mode, uint16_t window_si
     int sockfd_data = listenfd;
 
     FILE * fp = fopen("output_file.txt", "w+");
-    // Passamos port_in para que as funções internas (como srtp_receive_sr) 
-    // saibam que devem responder abrindo pacotes ou alterando a porta destino para port_in + 1
     srtp_receive(sockfd_data, port_in, fp, &servaddr, window_size_stabilished, protocol_mode);
     close(sockfd_data);
     return 0;

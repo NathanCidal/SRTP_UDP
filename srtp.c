@@ -93,7 +93,7 @@ int srtp_listen(int sockfd, struct sockaddr_in *client_addr){
                 pass = (srtp_checksum(buffer, n));
 
                 // Somente para Loop se receber uma mensagem de SYN
-                if(pass && (buffer[0] & 0x80)) break;        
+                if(pass && (buffer[0] == 0x80) && (buffer[1] == 0x00) && (buffer[2] == 0x00) && (buffer[3] == 0x0)) break;        
         }
         uint8_t client_window = buffer[4];
         return client_window;
@@ -147,23 +147,17 @@ int srtp_connect(int sockfd, struct sockaddr_in *server_addr, uint8_t window_siz
 
                 int n = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr*)&from_addr, &len);
                 if(n < 0){
-                        // Timeout: retransmite o SYN na próxima iteração
+                        // Timeout: Sends SYN Again
                         continue;
                 }
 
-                // Valida o checksum da Zlib (lembrando de zerar o campo de CRC do buffer antes)
                 if(srtp_checksum(buffer, n)){
-                        // Converte os primeiros 4 bytes de rede (Big-Endian) para o Host
-                        uint32_t word = ntohl(*(uint32_t*)&buffer[0]);
-                        
-                        uint8_t syn      = (word >> 31) & 1;
-                        uint8_t ack_flag = (word >> 15) & 1;
-
-                        // Se for um SYN+ACK legítimo
-                        if(syn && ack_flag){
-                                connected = 1;
-                                // O length (índice 4) traz a janela aceita pelo receptor
-                                window_size_decided = buffer[4]; 
+                        // Checks SYN+ACK and others data segements must be zero
+                        if (buffer[0] == 0x80 && buffer[1] == 0x00 &&
+                            buffer[2] == 0x80 && buffer[3] == 0x00)
+                        {
+                            connected = 1;
+                            window_size_decided = buffer[4];
                         }
                 }        
         }
@@ -172,7 +166,7 @@ int srtp_connect(int sockfd, struct sockaddr_in *server_addr, uint8_t window_siz
                 window_size_decided = window_size_client;
         }
 
-        // Configura o ACK final do Handshake (idêntico ao make_handshake_ack deles)
+        // Finish Handshake 
         connect_header = (struct srtp_header_t) {
                 .syn      = 0,
                 .fin      = 0,
@@ -191,10 +185,6 @@ int srtp_connect(int sockfd, struct sockaddr_in *server_addr, uint8_t window_siz
         connect_message = srtp_data(connect_header, 0);
         sendto(sockfd, connect_message, 9,  0, (struct sockaddr*)server_addr, len);
         free(connect_message);
-
-        // Uma pequena folga de segurança antes de inundar a rede com dados
-        // dá tempo para o Python processar o ACK localmente e entrar no estado 'receive_file'
-        usleep(10000); 
 
         return window_size_decided;
 }
@@ -219,11 +209,13 @@ int srtp_accept(int sockfd, struct sockaddr_in *client_addr, uint8_t window_size
                 .crc32    = 0
         };
 
-        struct sockaddr_in from_addr;   
         uint8_t buffer[BUFFER_SIZE];
         uint8_t pass = 0;
 
-        int current_tries = 0;
+        int current_tries = 0; // Parameter unused
+
+        struct sockaddr_in from_addr; 
+
 
         // Waits for ACK from Sender
         while(1){
@@ -236,8 +228,10 @@ int srtp_accept(int sockfd, struct sockaddr_in *client_addr, uint8_t window_size
                 if(n < 0) continue;
                 pass = (srtp_checksum(buffer, n));
 
-                // Somente para Loop se receber uma mensagem de SYN+ACK
-                if(pass && (buffer[2] & 0x80)) break;        
+                // Only stops loop when receives final packet: 0x00 0x00 0x80 0x00 0x00 (CRC Ignores in this case)
+                if(pass && (buffer[0] == 0x0) && (buffer[1] == (0x0)) && (buffer[2] == 0x80) && (buffer[3] == 0x0) && (buffer[4] == 0x0)){ 
+                        break;
+                }        
         }
 
         return 1;
@@ -557,6 +551,8 @@ int srtp_send_saw(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
         int n = 0;
         int checksum_b = 0;
 
+        struct sockaddr_in from_addr;
+
         uint8_t response[9];
         uint16_t seq_count = 0;
 
@@ -579,7 +575,7 @@ int srtp_send_saw(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
                         sendto(sockfd_data, data_segmenet, 9 + segement_header.length, 0, (struct sockaddr*)dest_addr, len);
                         free(data_segmenet);
 
-                        n = recvfrom(sockfd_ack, response, 9, 0, (struct sockaddr *)dest_addr, &len);
+                        n = recvfrom(sockfd_ack, response, 9, 0, (struct sockaddr *)&from_addr, &len);
                         
                         if(n < 0){
                                 // Retransmits Packet 
@@ -589,16 +585,16 @@ int srtp_send_saw(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
                         checksum_b = srtp_checksum(response, n);
 
                         if(checksum_b){
-                                // MAPEA OS 4 BYTES DA REDE USANDO NTOHL (Evita erros de deslocamento manual)
-                                uint32_t word = ntohl(*(uint32_t*)&response[0]);
+                                uint8_t  ack_flag  = (response[2] >> 7) & 0x01;
+                                uint8_t  nack_flag = (response[2] >> 6) & 0x01;
+                                uint16_t ack_num   = ((response[2] & 0x3F) << 8) | response[3];
 
-                                uint8_t  ack_flag  = (word >> 15) & 1;   // Bit 15: ACK Flag
-                                uint8_t  nack_flag = (word >> 14) & 1;   // Bit 14: NACK Flag
-                                uint16_t ack_num   = word & 0x3FFF;      // Bits 13-0: ACK numerc de 14 bits
-
-                                // Ack Count Equal and ACK_FLAG = 1
-                                if(ack_flag && !nack_flag && (ack_num == seq_count)){
-                                        data_received_correctly = 1;
+                                // Must be zero for correct response (0x00 0x00 ACK_DATA Lenght=0 ...)
+                                if((response[0] == 0x00) && response[1] == 0x00 && (response[4] == 0x0)){
+                                        // Ack Count Equal and ACK_FLAG = 1
+                                        if(ack_flag && !nack_flag && (ack_num == seq_count)){
+                                                data_received_correctly = 1;
+                                        }       
                                 }
                         }
                 }
@@ -644,7 +640,7 @@ int srtp_send(int sockfd_data, int sockfd_ack, FILE *file, const struct sockaddr
  * 0 - Success
  * 1 - Timeout? (Must Implement) 
  */
-int srtp_close(int sockfd_data, int sockfd_ack, struct sockaddr_in * dest_addr, uint16_t last_seq_count){
+int srtp_close(int sockfd_data, int sockfd_ack, struct sockaddr_in * dest_addr, uint16_t last_seq_count){ 
         // Sends a transmission informing that data is over
         int len = sizeof(struct sockaddr_in);
         
@@ -670,6 +666,8 @@ int srtp_close(int sockfd_data, int sockfd_ack, struct sockaddr_in * dest_addr, 
         printf("[SENDER] Trying to finish coommunication.\n");
         #endif
 
+        struct sockaddr_in from_addr;
+
         uint8_t response[9];
         uint8_t close_confirmed = 0;
         int timeout = 0;
@@ -684,9 +682,8 @@ int srtp_close(int sockfd_data, int sockfd_ack, struct sockaddr_in * dest_addr, 
                 sendto(sockfd_data, finish_data, 9, 0, (struct sockaddr*)dest_addr, len);
                 free(finish_data);
 
-                n = recvfrom(sockfd_ack, response, 9, 0, (struct sockaddr *)dest_addr, &len);
+                n = recvfrom(sockfd_ack, response, 9, 0, (struct sockaddr *)&from_addr, &len);
                 if(n < 0){
-                        usleep(100000); // 100ms Sleep
                         timeout++; 
                         continue; 
                 }
@@ -962,7 +959,7 @@ int srtp_receive_saw(int sockfd_data, uint16_t port_in, FILE * file_output, stru
                                 .nack = 0,
                                 .ack_flag = 0,
                                 .ack_num = seq_counter,
-                                .length = (n - 9),
+                                .length = 0,    // Lenght == 0 since its only an ACK with no payload
                                 .crc32 = 0 
                         };
 
@@ -971,7 +968,8 @@ int srtp_receive_saw(int sockfd_data, uint16_t port_in, FILE * file_output, stru
                         // Ack forced on P+1
                         source_addr->sin_port = htons(port_in + 1);
 
-                        if(((receive_buffer[0] & 0xC0) == (0x40)) && (payload_len == 0)){
+                        // Seq = 0, Only FIN in first segement
+                        if(((receive_buffer[0] == (0x40)) && (receive_buffer[1] == 0x00)) && (payload_len == 0)){
                                 fclose(file_output);
                                 break;
                         }
@@ -993,12 +991,6 @@ int srtp_receive_saw(int sockfd_data, uint16_t port_in, FILE * file_output, stru
                                 last_file_counter = file_counter;
                                 file_counter++;
                                 if(file_counter > 16383) file_counter = 0;
-
-                                // FIN da Comunicacao
-                                if(((receive_buffer[0] & 0xC0) == (0x40)) && (payload_len == 0)){
-                                        fclose(file_output);
-                                        break;
-                                }
                         }else{
                                 // Correct CRC, but with it being out of order or repeated, just sends ACK and continue (without increasing order)
                                 header.ack_flag = 1;
@@ -1021,7 +1013,7 @@ int srtp_receive(int sockfd_data, uint16_t port_in, FILE * file_output, struct s
         switch (mode)
         {
                 case GO_BACK_N_MODE:
-                        last_file_counter = srtp_receive_saw(sockfd_data, port_in, file_output, source_addr, window_size);
+                        last_file_counter = srtp_receive_gbn(sockfd_data, port_in, file_output, source_addr, window_size);
                 break;
                 case SELETIVE_REPEAT:
                         last_file_counter = srtp_receive_sr(sockfd_data, port_in, file_output, source_addr, window_size);

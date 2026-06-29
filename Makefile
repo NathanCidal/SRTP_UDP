@@ -1,5 +1,5 @@
 CC=gcc
-FLAGS= -lz # -DDEBUG	
+FLAGS= -lz -DDEBUG	
 SRC=main.c srtp.c parser.c
 INCLUDE=srtp.h
 TRG=executavel.out
