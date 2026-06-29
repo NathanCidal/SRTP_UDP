@@ -247,6 +247,14 @@ int srtp_send_sr(int sockfd_data, int sockfd_ack, FILE * file, const struct sock
         int n = 0;
         int checksum_b = 0;
 
+        // VAVRIÁVEIS PARA O RELATÓRIO
+        struct timeval start_time, end_time;
+        unsigned long long total_bytes_sent = 0;
+        unsigned long tx_originals = 0;
+        unsigned long tx_timeouts = 0;
+        unsigned long tx_nacks = 0;
+        gettimeofday(&start_time, NULL);
+
         uint8_t ** file_data = malloc(sizeof(uint8_t *) * window_size);
         for(int i = 0; i < window_size; i++){
                 file_data[i] = malloc(sizeof(uint8_t) * 255);
@@ -313,6 +321,9 @@ int srtp_send_sr(int sockfd_data, int sockfd_ack, FILE * file, const struct sock
                         sendto(sockfd_data, data_segment, 9 + segment_header.length, 0, (struct sockaddr*)dest_addr, len);
                         free(data_segment);
 
+                        tx_originals++;
+                        total_bytes_sent += segment_header.length;
+
                         gettimeofday(&timers[buf_idx], NULL); // Start individual timer
                         send_ptr = (send_ptr + 1) & 0x3FFF;
                 }
@@ -327,9 +338,9 @@ int srtp_send_sr(int sockfd_data, int sockfd_ack, FILE * file, const struct sock
                                                (now.tv_usec - timers[buf_idx].tv_usec) / 1000;
                                 
                                 if (elapsed >= 100) { // Individual 100ms Timeout
-                                        #ifdef DEBUG
-                                        printf("[SR SENDER] Timeout detected for specific packet: %d. Retransmitting alone.\n", check_ptr);
-                                        #endif
+                                        tx_timeouts++;
+                                        total_bytes_sent += file_sizes[buf_idx];
+
                                         struct srtp_header_t retransmit_header = {
                                                 .syn = 0, .fin = 0,
                                                 .seq = check_ptr,
@@ -348,9 +359,6 @@ int srtp_send_sr(int sockfd_data, int sockfd_ack, FILE * file, const struct sock
                 }
 
                 if (end_of_file && base == next_seq) {
-                        #ifdef DEBUG
-                        printf("[SR SENDER] All segments successfully acknowledged. Exiting main loop.\n");
-                        #endif
                         break;
                 }
 
@@ -370,9 +378,6 @@ int srtp_send_sr(int sockfd_data, int sockfd_ack, FILE * file, const struct sock
 
                         if (is_ack && (dist < window_size)) {
                                 int buf_idx = ack_count % window_size;
-                                #ifdef DEBUG
-                                printf("[SR SENDER] Individual ACK received for packet: %d.\n", ack_count);
-                                #endif
                                 ack_flags[buf_idx] = 1; // Mark this specific packet as confirmed
 
                                 // Slide window forward if base packet got acknowledged
@@ -382,9 +387,9 @@ int srtp_send_sr(int sockfd_data, int sockfd_ack, FILE * file, const struct sock
                         }
                         else if (is_nack && (dist < window_size)) {
                                 int buf_idx = ack_count % window_size;
-                                #ifdef DEBUG
-                                printf("[SR SENDER] Explicit NACK received for packet: %d. Fast retransmitting.\n", ack_count);
-                                #endif
+                                tx_nacks++;
+                                total_bytes_sent += file_sizes[buf_idx];
+
                                 struct srtp_header_t nack_header = {
                                         .syn = 0, .fin = 0,
                                         .seq = ack_count,
@@ -401,25 +406,48 @@ int srtp_send_sr(int sockfd_data, int sockfd_ack, FILE * file, const struct sock
                 }
         }
 
+        gettimeofday(&end_time, NULL);
+        double duration = (end_time.tv_sec - start_time.tv_sec) + (end_time.tv_usec - start_time.tv_usec) / 1000000.0;
+        double throughput = (total_bytes_sent / 1024.0) / duration;
+
+        printf("\n====================================================\n");
+        printf("       SRTP REPORT METRICS - SELECTIVE REPEAT        \n");
+        printf("====================================================\n");
+        printf("Tempo Total de Execução    : %.4f segundos\n", duration);
+        printf("Segmentos Iniciais Enviados: %lu\n", tx_originals);
+        printf("Retransmissões por Timeout : %lu\n", tx_timeouts);
+        printf("Retransmissões por NACK    : %lu\n", tx_nacks);
+        printf("Total Geral Retransmitido  : %lu\n", tx_timeouts + tx_nacks);
+        printf("Volume de Carga Útil Transf: %llu Bytes\n", total_bytes_sent);
+        printf("Throughput Efetivo Obtido  : %.2f KB/s\n", throughput);
+        printf("====================================================\n\n");
+
         for(int i = 0; i < window_size; i++){
                 free(file_data[i]);
         }
         free(file_data);
 
-        return (int)((base - 1) & 0x3FFF); // Must reduce in one
+        return (int)((base - 1) & 0x3FFF); 
 }
 
 /*
  * SRTP_Send in Go-Back-N Mode
  * Keeps a window of data (to send in case its needed)
- * 
  */
 int srtp_send_gbn(int sockfd_data, int sockfd_ack, FILE * file, const struct sockaddr_in *dest_addr, uint8_t window_size){
 
         uint8_t file_segmenets[255];
         int len = sizeof(struct sockaddr_in);
-        int n = 0;              //N Bytes from recvfrom()
-        int checksum_b = 0;     //Boolean for Checksum
+        int n = 0;              
+        int checksum_b = 0;     
+
+        // VARIÁVEIS PARA O RELATÓRIO
+        struct timeval start_time, end_time;
+        unsigned long long total_bytes_sent = 0;
+        unsigned long tx_packets = 0;
+        unsigned long tx_timeouts = 0;
+        unsigned long tx_nacks = 0;
+        gettimeofday(&start_time, NULL);
 
         uint8_t ** file_data = malloc(sizeof(uint8_t *) * window_size);
         for(int i = 0; i < window_size; i++){
@@ -433,16 +461,15 @@ int srtp_send_gbn(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
                 }
         }
 
-        uint8_t response[9];    //Used in ACK/NACKs
+        uint8_t response[9];    
         size_t bytes_readen = 0;
         uint16_t base = 0;
         uint16_t next_seq = 0;
-        uint8_t  end_of_file = 0;       // Boolean to recognize EOF
-        uint16_t file_sizes[window_size]; // Buffer used to know packet size for sendto()
+        uint8_t  end_of_file = 0;       
+        uint16_t file_sizes[window_size]; 
 
         uint16_t ack_count = 0;
-
-        uint16_t send_ptr = 0; // Pointer for next file
+        uint16_t send_ptr = 0; 
 
         while(1){
                 while (((uint16_t)(next_seq - base) & 0x3FFF) < window_size && !end_of_file) {
@@ -459,7 +486,6 @@ int srtp_send_gbn(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
                         }
                 }
 
-                // Implementation of GBN
                 // Send Packets (In Window Size)
                 while (send_ptr != next_seq) {
                         int buf_idx = send_ptr % window_size;
@@ -476,22 +502,19 @@ int srtp_send_gbn(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
                         sendto(sockfd_data, data_segment, 9 + segment_header.length, 0, (struct sockaddr*)dest_addr, len);
                         free(data_segment);
                         
+                        tx_packets++;
+                        total_bytes_sent += segment_header.length;
                         send_ptr = (send_ptr + 1) & 0x3FFF;
                 }
 
                 if (end_of_file && base == next_seq) {
-                        #ifdef DEBUG
-                        printf("[GBN SENDER] All segments successfully acknowledged. Exiting main loop.\n");
-                        #endif
                         break;
                 }
 
                 n = recvfrom(sockfd_ack, response, 9, 0, (struct sockaddr *)dest_addr, &len);
                 if (n < 0) 
                 {
-                        #ifdef DEBUG
-                        printf("[GBN SENDER] Timeout to base value %d...\n", base);
-                        #endif
+                        tx_timeouts++;
                         send_ptr = base; // GO Back N in Timeout
                         continue;
                 }
@@ -510,12 +533,8 @@ int srtp_send_gbn(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
                                 uint16_t dist = (uint16_t)(ack_count - base) & 0x3FFF;
                                 
                                 if (dist < window_size) {
-                                        #ifdef DEBUG
-                                        printf("[GBN SENDER] Valid Cumulative ACK received: %d.\n", ack_count);
-                                        #endif
                                         base = (ack_count + 1) & 0x3FFF; 
                                         
-                                        // Sincroniza o send_ptr caso a base avance além dele
                                         uint16_t send_dist = (uint16_t)(send_ptr - base) & 0x3FFF;
                                         if (send_dist > window_size) {
                                                 send_ptr = base;
@@ -523,13 +542,26 @@ int srtp_send_gbn(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
                                 }
                         }
                         else if (is_nack) {
-                                #ifdef DEBUG
-                                printf("[GBN SENDER] NACK received! Rolling back send pointer to expected packet: %d.\n", ack_count);
-                                #endif
-                                send_ptr = ack_count; // FIXED: No NACK, recua o ponteiro para o ponto do erro imediatamente
+                                tx_nacks++;
+                                send_ptr = ack_count; 
                         }
                 }
         }
+
+        gettimeofday(&end_time, NULL);
+        double duration = (end_time.tv_sec - start_time.tv_sec) + (end_time.tv_usec - start_time.tv_usec) / 1000000.0;
+        double throughput = (total_bytes_sent / 1024.0) / duration;
+
+        printf("\n====================================================\n");
+        printf("       SRTP REPORT METRICS - GO-BACK-N               \n");
+        printf("====================================================\n");
+        printf("Tempo Total de Execução    : %.4f segundos\n", duration);
+        printf("Total de Quadros Despachados: %lu\n", tx_packets);
+        printf("Estouros de Timeout (Base) : %lu\n", tx_timeouts);
+        printf("Eventos de NACK Capturados : %lu\n", tx_nacks);
+        printf("Volume Total Trafegado     : %llu Bytes\n", total_bytes_sent);
+        printf("Throughput Efetivo Obtido  : %.2f KB/s\n", throughput);
+        printf("====================================================\n\n");
 
         for(int i = 0; i < window_size; i++){
                 free(file_data[i]);
@@ -540,8 +572,6 @@ int srtp_send_gbn(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
 
 /*
  * SRTP_Send in Stop-and-Wait Mode
- * Sends 1 Packet -> Wait for ACK -> (In case of timeout, sends again)
- * No reaction to NACKs
  */
 int srtp_send_saw(int sockfd_data, int sockfd_ack, FILE * file, const struct sockaddr_in *dest_addr, uint8_t window_size){
         uint8_t file_segmenent[255];
@@ -551,22 +581,26 @@ int srtp_send_saw(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
         int n = 0;
         int checksum_b = 0;
 
-        struct sockaddr_in from_addr;
+        // VARIÁVEIS PARA O RELATÓRIO
+        struct timeval start_time, end_time;
+        unsigned long long total_bytes_sent = 0;
+        unsigned long tx_originals = 0;
+        unsigned long tx_timeouts = 0;
+        gettimeofday(&start_time, NULL);
 
+        struct sockaddr_in from_addr;
         uint8_t response[9];
         uint16_t seq_count = 0;
 
         while((bytes_lidos = fread(file_segmenent, 1, 255, file)) > 0){
                 data_received_correctly = 0;
+                tx_originals++;
 
                 while(!data_received_correctly){
                         struct srtp_header_t segement_header = {
-                                .syn = 0,
-                                .fin = 0,
+                                .syn = 0, .fin = 0,
                                 .seq = seq_count,
-                                .ack_flag = 0,
-                                .nack = 0,
-                                .ack_num = 0,
+                                .ack_flag = 0, .nack = 0, .ack_num = 0,
                                 .length = (uint8_t)bytes_lidos,
                                 .crc32 = 0 
                         };
@@ -575,10 +609,12 @@ int srtp_send_saw(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
                         sendto(sockfd_data, data_segmenet, 9 + segement_header.length, 0, (struct sockaddr*)dest_addr, len);
                         free(data_segmenet);
 
+                        total_bytes_sent += segement_header.length;
+
                         n = recvfrom(sockfd_ack, response, 9, 0, (struct sockaddr *)&from_addr, &len);
                         
                         if(n < 0){
-                                // Retransmits Packet 
+                                tx_timeouts++;
                                 continue; 
                         }
 
@@ -589,9 +625,7 @@ int srtp_send_saw(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
                                 uint8_t  nack_flag = (response[2] >> 6) & 0x01;
                                 uint16_t ack_num   = ((response[2] & 0x3F) << 8) | response[3];
 
-                                // Must be zero for correct response (0x00 0x00 ACK_DATA Lenght=0 ...)
                                 if((response[0] == 0x00) && response[1] == 0x00 && (response[4] == 0x0)){
-                                        // Ack Count Equal and ACK_FLAG = 1
                                         if(ack_flag && !nack_flag && (ack_num == seq_count)){
                                                 data_received_correctly = 1;
                                         }       
@@ -599,7 +633,6 @@ int srtp_send_saw(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
                         }
                 }
 
-                // Limpo o buffer de envio por garantia
                 for(int i = 0; i < 255; i++){
                         file_segmenent[i] = 0;
                 }
@@ -608,9 +641,22 @@ int srtp_send_saw(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
                 if(seq_count > 16383) seq_count = 0;
         }
 
+        gettimeofday(&end_time, NULL);
+        double duration = (end_time.tv_sec - start_time.tv_sec) + (end_time.tv_usec - start_time.tv_usec) / 1000000.0;
+        double throughput = (total_bytes_sent / 1024.0) / duration;
+
+        printf("\n====================================================\n");
+        printf("       SRTP REPORT METRICS - STOP-AND-WAIT          \n");
+        printf("====================================================\n");
+        printf("Tempo Total de Execução    : %.4f segundos\n", duration);
+        printf("Segmentos Únicos do Arquivo: %lu\n", tx_originals);
+        printf("Retransmissões por Timeout : %lu\n", tx_timeouts);
+        printf("Volume Total de Bytes (Tx) : %llu Bytes\n", total_bytes_sent);
+        printf("Throughput Efetivo Obtido  : %.2f KB/s\n", throughput);
+        printf("====================================================\n\n");
+
         return seq_count;
 }
-
 /*
  * Work as Wrapper for the modes for SRTP_Send
  */
