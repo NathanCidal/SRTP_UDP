@@ -1000,8 +1000,9 @@ int srtp_receive_saw(int sockfd_data, uint16_t port_in, FILE * file_output, stru
                                         break;
                                 }
                         }else{
-                                // Incorrect ! Send NACK and Repeat process
-                                header.nack = 1;
+                                // Correct CRC, but with it being out of order or repeated, just sends ACK and continue (without increasing order)
+                                header.ack_flag = 1;
+
                                 response_to_otherside = srtp_data(header, 0); //No Payload since its a response
                                 sendto(sockfd_data, response_to_otherside, 9, 0, (struct sockaddr *)source_addr, len);
                                 free(response_to_otherside);
