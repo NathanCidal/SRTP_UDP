@@ -842,6 +842,9 @@ int srtp_receive_sr(int sockfd_data, uint16_t port_in, FILE * file_output, struc
  * SRTP Receive in Go-Back-N (Mode)
  * Returns Last_Seq_Count (used for closing connection later)
  */
+/*
+ * SRTP Receive in Go-Back-N (Mode)
+ */
 int srtp_receive_gbn(int sockfd_data, uint16_t port_in, FILE * file_output, struct sockaddr_in * source_addr, uint8_t window_size){
         uint8_t receive_buffer[BUFFER_SIZE];
         uint16_t file_counter = 0;
@@ -887,6 +890,7 @@ int srtp_receive_gbn(int sockfd_data, uint16_t port_in, FILE * file_output, stru
                                 break;
                         }
 
+                        // Correct Order File
                         if (seq_counter == file_counter) {
                                 header.ack_flag = 1;
                                 header.nack = 0;
@@ -908,13 +912,18 @@ int srtp_receive_gbn(int sockfd_data, uint16_t port_in, FILE * file_output, stru
                                 last_file_counter = file_counter;
                                 file_counter = (file_counter + 1) & 0x3FFF;
                         } 
+
+                        // In case of out of order
                         else {
-                                header.ack_flag = 0;
-                                header.nack = 1;
-                                header.ack_num = file_counter;
+                                uint16_t ultimo_correto = (file_counter == 0) ? 16383 : (file_counter - 1);
+
+                                header.ack_flag = 1; 
+                                header.nack = 0;    
+                                header.ack_num = ultimo_correto; 
 
                                 #ifdef DEBUG
-                                printf("[GBN RECEIVER] Out of order! Expected %d, got %d. Sending NACK.\n", file_counter, seq_counter);
+                                printf("[GBN RECEIVER] Out of order! Expected %d, got %d. Sending ACK duplicate for %d.\n", 
+                                       file_counter, seq_counter, ultimo_correto);
                                 #endif
 
                                 response_to_otherside = srtp_data(header, 0);
