@@ -559,7 +559,6 @@ int srtp_send_saw(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
 
         uint8_t response[9];
         uint16_t seq_count = 0;
-        uint16_t ack_count = 0;
 
         while((bytes_lidos = fread(file_segmenent, 1, 255, file)) > 0){
                 data_received_correctly = 0;
@@ -590,11 +589,15 @@ int srtp_send_saw(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
                         checksum_b = srtp_checksum(response, n);
 
                         if(checksum_b){
-                                ack_count = (response[2] & 0x3F) << 8;
-                                ack_count |= response[3]; 
+                                // MAPEA OS 4 BYTES DA REDE USANDO NTOHL (Evita erros de deslocamento manual)
+                                uint32_t word = ntohl(*(uint32_t*)&response[0]);
+
+                                uint8_t  ack_flag  = (word >> 15) & 1;   // Bit 15: ACK Flag
+                                uint8_t  nack_flag = (word >> 14) & 1;   // Bit 14: NACK Flag
+                                uint16_t ack_num   = word & 0x3FFF;      // Bits 13-0: ACK numerc de 14 bits
 
                                 // Ack Count Equal and ACK_FLAG = 1
-                                if((ack_count == seq_count) && (response[2] & 0x80)){
+                                if(ack_flag && !nack_flag && (ack_num == seq_count)){
                                         data_received_correctly = 1;
                                 }
                         }
@@ -671,8 +674,12 @@ int srtp_close(int sockfd_data, int sockfd_ack, struct sockaddr_in * dest_addr, 
         uint8_t close_confirmed = 0;
         int timeout = 0;
         while(!close_confirmed){
-                if(timeout == MAX_TRIES) break;
-
+                if(timeout == MAX_TRIES){
+                        #ifdef DEBUG
+                        printf("[SENDER] Timeout - Finishing comunication in order to prevent infinite local loop\n");
+                        #endif
+                        break;
+                }
                 uint8_t * finish_data = srtp_data(fin_header, 0);
                 sendto(sockfd_data, finish_data, 9, 0, (struct sockaddr*)dest_addr, len);
                 free(finish_data);
