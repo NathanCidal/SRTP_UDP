@@ -219,11 +219,6 @@ int srtp_accept(int sockfd, struct sockaddr_in *client_addr, uint8_t window_size
                 .crc32    = 0
         };
 
-        // Sends SYN + Window_Size
-        accept_message = srtp_data(connect_header, 0);
-        sendto(sockfd, accept_message, 9,  0, (struct sockaddr*)client_addr, len);
-        free(accept_message);
-
         struct sockaddr_in from_addr;   
         uint8_t buffer[BUFFER_SIZE];
         uint8_t pass = 0;
@@ -232,6 +227,11 @@ int srtp_accept(int sockfd, struct sockaddr_in *client_addr, uint8_t window_size
 
         // Waits for ACK from Sender
         while(1){
+                // Sends SYN + Window_Size (In Loop waiting for connection)
+                accept_message = srtp_data(connect_header, 0);
+                sendto(sockfd, accept_message, 9,  0, (struct sockaddr*)client_addr, len);
+                free(accept_message);
+                
                 int n = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct  sockaddr*)&from_addr, &len);
                 if(n < 0) continue;
                 pass = (srtp_checksum(buffer, n));
