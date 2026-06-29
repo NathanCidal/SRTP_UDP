@@ -1,6 +1,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
 
 #include "parser.h"
 #include "srtp.h"
@@ -42,12 +45,14 @@ int interface_listen(uint16_t port_in, uint8_t protocol_mode, uint16_t window_si
     if(!verify){
         printf("Error!\n");
         close(listenfd);
+        return 1;
     }
-
 
     int sockfd_data = listenfd;
 
     FILE * fp = fopen("output_file.txt", "w+");
+    // Passamos port_in para que as funções internas (como srtp_receive_sr) 
+    // saibam que devem responder abrindo pacotes ou alterando a porta destino para port_in + 1
     srtp_receive(sockfd_data, port_in, fp, &servaddr, window_size_stabilished, protocol_mode);
     close(sockfd_data);
     return 0;
@@ -59,59 +64,46 @@ int interface_host(uint16_t port_in, uint8_t protocol_mode, char * ip, char * fi
     
     bzero(&servaddr, sizeof(servaddr));
     servaddr.sin_addr.s_addr = inet_addr(ip);
-    servaddr.sin_port = htons(port_in);
+    servaddr.sin_port = htons(port_in); // Destino é a porta P (6000)
     servaddr.sin_family = AF_INET;
-    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     
-    // Stabilish Connection to the Server IP
-    if(connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) < 0)
-    {
-        printf("\n Error : Connect Failed \n");
-        exit(0);
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    struct sockaddr_in local_src_addr;
+    bzero(&local_src_addr, sizeof(local_src_addr));
+    local_src_addr.sin_family = AF_INET;
+    local_src_addr.sin_addr.s_addr = htonl(INADDR_ANY); 
+    local_src_addr.sin_port = htons(port_in + 1);       
+
+    if (bind(sockfd, (struct sockaddr*)&local_src_addr, sizeof(local_src_addr)) < 0) {
+        perror("! Erro ! Falha ao fixar a porta de origem P+1 no Host");
+        close(sockfd);
+        return 1;
     }
 
-    uint8_t window_size_desired = window_size;
-    uint8_t window_size_stablished = 55;
+    struct timeval time_value;
+    time_value.tv_sec = 0;
+    time_value.tv_usec = 100000; 
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &time_value, sizeof(time_value));
 
     #ifdef DEBUG
     printf("> Begin SRTP_Connect!\n");
     #endif
     
-    window_size_stablished = srtp_connect(sockfd, &servaddr, window_size_desired);
+    uint8_t window_size_stablished = srtp_connect(sockfd, &servaddr, window_size);
 
     #ifdef DEBUG
     printf("> Stabilished Window: %d\n", window_size_stablished);
     #endif
 
-    // Communication Process with Dual-Port 
     int sockfd_data = sockfd;
-    int sockfd_ack = socket(AF_INET, SOCK_DGRAM, 0);
-
-    struct sockaddr_in local_ack_addr;
-    bzero(&local_ack_addr, sizeof(local_ack_addr));
-    local_ack_addr.sin_family = AF_INET;
-    local_ack_addr.sin_addr.s_addr = htonl(INADDR_ANY); 
-    local_ack_addr.sin_port = htons(port_in + 1);       
-
-    if (bind(sockfd_ack, (struct sockaddr*)&local_ack_addr, sizeof(local_ack_addr)) < 0) {
-        perror("! Erro ! Binding Error on P+1 on Sender");
-        close(sockfd);
-        close(sockfd_ack);
-        return 1;
-    }
-
-    // Configurate Socket to have support for Timeouts
-    struct timeval time_value;
-    time_value.tv_sec = 0;
-    time_value.tv_usec = 100000; //100ms - Fixed time in the specification
-    setsockopt(sockfd_ack, SOL_SOCKET, SO_RCVTIMEO, &time_value, sizeof(time_value));
+    int sockfd_ack  = sockfd; 
 
     FILE * fp = fopen(file_name, "r");
     if(!fp){
         printf("! Error ! - Input File Missing\n");
         srtp_close(sockfd_data, sockfd_ack, &servaddr, 0);
-        close(sockfd_ack);
-        close(sockfd_data);
+        close(sockfd);
         return 1;
     }
 
@@ -121,7 +113,6 @@ int interface_host(uint16_t port_in, uint8_t protocol_mode, char * ip, char * fi
     // Finalizes Communication
     srtp_close(sockfd_data, sockfd_ack, &servaddr, count);
     close(sockfd);
-    close(sockfd_ack);
     return 0;
 }
 

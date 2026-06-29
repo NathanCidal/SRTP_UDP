@@ -107,11 +107,12 @@ int srtp_listen(int sockfd, struct sockaddr_in *client_addr){
 int srtp_connect(int sockfd, struct sockaddr_in *server_addr, uint8_t window_size){
         uint8_t * connect_message;
         uint8_t window_size_client = window_size;
-        uint8_t window_size_decided;
+        uint8_t window_size_decided = 1;
 
         struct sockaddr_in from_addr; 
         int len = sizeof(struct sockaddr_in);
 
+        // Monta o cabeçalho seguindo a estrutura de bits deles
         struct srtp_header_t connect_header = {
                 .syn      = 1,
                 .fin      = 0,
@@ -123,7 +124,6 @@ int srtp_connect(int sockfd, struct sockaddr_in *server_addr, uint8_t window_siz
                 .crc32    = 0
         };
 
-        // Send SYN + Window_Size
         #ifdef DEBUG
         printf("> Sending SYN + WindowSize!\n");
         #endif
@@ -133,7 +133,7 @@ int srtp_connect(int sockfd, struct sockaddr_in *server_addr, uint8_t window_siz
 
         struct timeval time_value;
         time_value.tv_sec = 0;
-        time_value.tv_usec = 100000; //100ms - Fixed time in the specification
+        time_value.tv_usec = 100000; // 100ms - Fixed timeout
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &time_value, sizeof(time_value));
 
         while(!connected){
@@ -141,33 +141,38 @@ int srtp_connect(int sockfd, struct sockaddr_in *server_addr, uint8_t window_siz
                 sendto(sockfd, connect_message, 9,  0, (struct sockaddr*)server_addr, len);
                 free(connect_message);
 
-                uint8_t pass = 0;
-                // Waits for SYN+ACK from Receiver
                 #ifdef DEBUG
                 printf("> Waiting for SYN+ACK!\n");
                 #endif
 
-                int n = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct  sockaddr*)&from_addr, &len);
+                int n = recvfrom(sockfd, buffer, BUFFER_SIZE, 0, (struct sockaddr*)&from_addr, &len);
                 if(n < 0){
-                        usleep(200000); //200ms de Sleep para nao floodar com SYN
+                        // Timeout: retransmite o SYN na próxima iteração
                         continue;
                 }
-                pass = (srtp_checksum(buffer, n));
 
+                // Valida o checksum da Zlib (lembrando de zerar o campo de CRC do buffer antes)
+                if(srtp_checksum(buffer, n)){
+                        // Converte os primeiros 4 bytes de rede (Big-Endian) para o Host
+                        uint32_t word = ntohl(*(uint32_t*)&buffer[0]);
+                        
+                        uint8_t syn      = (word >> 31) & 1;
+                        uint8_t ack_flag = (word >> 15) & 1;
 
-                // Stops loop after a SYN+ACK Is received
-                if(pass && ((buffer[0] & 0x80) && (buffer[2] & 0x80))){
-                        connected = 1;
+                        // Se for um SYN+ACK legítimo
+                        if(syn && ack_flag){
+                                connected = 1;
+                                // O length (índice 4) traz a janela aceita pelo receptor
+                                window_size_decided = buffer[4]; 
+                        }
                 }        
         }
         
-        window_size_decided = buffer[4];
-        if(window_size_decided > window_size_client)
-        { 
+        if(window_size_decided > window_size_client) { 
                 window_size_decided = window_size_client;
         }
 
-        // Sends last ACK, stabilishing connection to the other side
+        // Configura o ACK final do Handshake (idêntico ao make_handshake_ack deles)
         connect_header = (struct srtp_header_t) {
                 .syn      = 0,
                 .fin      = 0,
@@ -180,16 +185,19 @@ int srtp_connect(int sockfd, struct sockaddr_in *server_addr, uint8_t window_siz
         };
 
         #ifdef DEBUG
-        printf("> Waiting for ACK!\n");
+        printf("> Sending Handshake ACK!\n");
         #endif
         
         connect_message = srtp_data(connect_header, 0);
         sendto(sockfd, connect_message, 9,  0, (struct sockaddr*)server_addr, len);
         free(connect_message);
 
+        // Uma pequena folga de segurança antes de inundar a rede com dados
+        // dá tempo para o Python processar o ACK localmente e entrar no estado 'receive_file'
+        usleep(10000); 
+
         return window_size_decided;
 }
-
 /*
  * Who makes treatment of window_size is not the SRPT API, must be made by the user outside of it
  * Returns 0 in case of timeout                 (Not Implemented)
@@ -640,16 +648,20 @@ int srtp_close(int sockfd_data, int sockfd_ack, struct sockaddr_in * dest_addr, 
         int n = 0;
         int checksum_b = 0;
 
+        uint16_t last_val = 0;
+        //last_val = last_seq_count; // Change in case Last Seq is used to Finish Comunication
+
         struct srtp_header_t fin_header = {
                 .syn      = 0,
                 .fin      = 1,                 
-                .seq      = last_seq_count,    
+                .seq      = last_val,    
                 .ack_flag = 0,
                 .nack     = 0,
                 .ack_num  = 0,
                 .length   = 0,
                 .crc32    = 0
         };
+
 
         #ifdef DEBUG
         printf("[SENDER] Trying to finish coommunication.\n");
@@ -671,7 +683,7 @@ int srtp_close(int sockfd_data, int sockfd_ack, struct sockaddr_in * dest_addr, 
                         uint16_t ack_num = (response[2] & 0x3F) << 8;
                         ack_num |= response[3];        
 
-                        if (fin_flag && ack_flag && (ack_num == last_seq_count)) {
+                        if (fin_flag && ack_flag && (ack_num == last_val)) {
                                 close_confirmed = 1;
                                 #ifdef DEBUG
                                 printf("[SENDER] Success on termination of communication via FIN+ACK.\n");
@@ -945,6 +957,11 @@ int srtp_receive_saw(int sockfd_data, uint16_t port_in, FILE * file_output, stru
                         // Ack forced on P+1
                         source_addr->sin_port = htons(port_in + 1);
 
+                        if(((receive_buffer[0] & 0xC0) == (0x40)) && (payload_len == 0)){
+                                fclose(file_output);
+                                break;
+                        }
+
                         // Correct Send Process
                         if((file_counter) == seq_counter){
                                 header.ack_flag = 1;
@@ -999,6 +1016,8 @@ int srtp_receive(int sockfd_data, uint16_t port_in, FILE * file_output, struct s
                 last_file_counter = srtp_receive_saw(sockfd_data, port_in, file_output, source_addr, window_size);
                 break;
         }
+
+        last_file_counter = 0; // Change in case Last Seq is used to Finish Comunication
 
         // Finalizes Communicatin send FIN+ACK
         struct srtp_header_t finish_header = {
