@@ -12,7 +12,7 @@
 #include <sys/time.h>
 
 #define BUFFER_SIZE 4096
-#define MAX_TRIES    100
+#define MAX_TRIES     20
 
 #define STOP_AND_WAIT_MODE 1
 #define GO_BACK_N_MODE     2
