@@ -27,13 +27,13 @@ clean:
 # On Linux, Commands:
 
 # Packet Loss:
-# sudo tc qdisc add dev lo root netem loss 25%
+# sudo tc qdisc add dev wlp2s0 root netem loss 25%
 
 # Pure Delay:
-# sudo tc qdisc add dev lo root netem delay 50ms
+# sudo tc qdisc add dev wlp2s0 root netem delay 50ms
 
 # Change order:
-# sudo tc qdisc add dev lo root netem delay 10ms reorder 25% 50%
+# sudo tc qdisc add dev wlp2s0 root netem delay 10ms reorder 25% 50%
 
 # To Reset to default (network):
-# sudo tc qdisc del dev dev lo root
+# sudo tc qdisc del dev dev wlp2s0 root 2 > /dev/null
