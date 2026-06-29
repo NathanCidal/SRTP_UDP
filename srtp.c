@@ -235,7 +235,6 @@ int srtp_accept(int sockfd, struct sockaddr_in *client_addr, uint8_t window_size
         return 1;
 }
 
-
 /*
  * SRTP_Send in Seletive-Repeat Mode
  * Keeps a window of data (to send in case its needed)
@@ -278,7 +277,7 @@ int srtp_send_sr(int sockfd_data, int sockfd_ack, FILE * file, const struct sock
         uint16_t send_ptr = 0;
 
         while(1){
-                // PASSO 1: Fills window based on available slots
+                // Fills window based on available slots
                 while (((uint16_t)(next_seq - base) & 0x3FFF) < window_size && !end_of_file) {
                         bytes_readen = fread(file_segments, 1, 255, file);
                         if (bytes_readen > 0) {
@@ -296,7 +295,7 @@ int srtp_send_sr(int sockfd_data, int sockfd_ack, FILE * file, const struct sock
                         }
                 }
 
-                // PASSO 2: Transmission of brand new packets
+                // Transmission of new packets
                 while (send_ptr != next_seq) {
                         int buf_idx = send_ptr % window_size;
                         
@@ -316,7 +315,7 @@ int srtp_send_sr(int sockfd_data, int sockfd_ack, FILE * file, const struct sock
                         send_ptr = (send_ptr + 1) & 0x3FFF;
                 }
 
-                // PASSO 3: Check individual timeouts for packets currently in flight
+                // Check individual timeouts for packets currently in flight
                 gettimeofday(&now, NULL);
                 uint16_t check_ptr = base;
                 while (check_ptr != next_seq) {
@@ -405,7 +404,7 @@ int srtp_send_sr(int sockfd_data, int sockfd_ack, FILE * file, const struct sock
         }
         free(file_data);
 
-        return (int)next_seq;
+        return (int)((base - 1) & 0x3FFF); // Must reduce in one
 }
 
 /*

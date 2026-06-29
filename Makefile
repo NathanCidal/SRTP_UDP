@@ -1,7 +1,5 @@
-# Makefile de Exemplo de Aplicacao UDP
-
 CC=gcc
-FLAGS= -lz #-DDEBUG	
+FLAGS= -lz # -DDEBUG	
 SRC=main.c srtp.c parser.c
 INCLUDE=srtp.h
 TRG=executavel.out
@@ -9,7 +7,7 @@ TRG=executavel.out
 PORT=6000
 FILE_NAME=input/input_01.txt
 IP=127.0.0.1
-SIZE=1
+SIZE=4
 MODE=saw
 
 all: build
