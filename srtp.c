@@ -235,22 +235,29 @@ int srtp_accept(int sockfd, struct sockaddr_in *client_addr, uint8_t window_size
         return 1;
 }
 
+
+
 /*
- * API Function used to send FILE to another Host
- *
- * Modes:
- * 0 - SaW (Stop and Wait) - Uses at max 1 of Window Size
- * 1 - GBN (Go Back N)
- * 2 - SR  (Selective Repeat)
- * 
- * Returns last_seq value in case of success
+ * SRTP_Send in Go-Back-N Mode
+ * Keeps a window of data (to send in case its needed)
  */
-int srtp_send(int sockfd_data, int sockfd_ack, FILE *file, const struct sockaddr_in *dest_addr, uint8_t window_size, int mode){
-        // First Breaks the FILE in 255 Bytes (for each send)
+int srtp_send_gbn(int sockfd_data, int sockfd_ack, FILE * file, const struct sockaddr_in *dest_addr, uint8_t window_size){
+
+        
+
+
+}
+
+
+/*
+ * SRTP_Send in Stop-and-Wait Mode
+ * Sends 1 Packet -> Wait for ACK -> (In case of timeout, sends again)
+ * No reaction to NACKs
+ */
+int srtp_send_saw(int sockfd_data, int sockfd_ack, FILE * file, const struct sockaddr_in *dest_addr, uint8_t window_size){
         uint8_t file_segmenent[255];
         size_t bytes_lidos = 0;
         int len = sizeof(struct sockaddr_in);
-        
         uint8_t data_received_correctly = 0;
         int n = 0;
         int checksum_b = 0;
@@ -259,7 +266,6 @@ int srtp_send(int sockfd_data, int sockfd_ack, FILE *file, const struct sockaddr
         uint16_t seq_count = 0;
         uint16_t ack_count = 0;
 
-        // Enquanto tem como segementar o arquivo em 255 Bytes, e segmentado.
         while((bytes_lidos = fread(file_segmenent, 1, 255, file)) > 0){
                 data_received_correctly = 0;
 
@@ -280,6 +286,12 @@ int srtp_send(int sockfd_data, int sockfd_ack, FILE *file, const struct sockaddr
                         free(data_segmenet);
 
                         n = recvfrom(sockfd_ack, response, 9, 0, (struct sockaddr *)dest_addr, &len);
+                        
+                        if(n < 0){
+                                // Retransmits Packet 
+                                continue; 
+                        }
+
                         checksum_b = srtp_checksum(response, n);
 
                         if(checksum_b){
@@ -303,6 +315,30 @@ int srtp_send(int sockfd_data, int sockfd_ack, FILE *file, const struct sockaddr
         }
 
         return seq_count;
+}
+
+
+/*
+ * Work as Wrapper for the modes for SRTP_Send
+ */
+int srtp_send(int sockfd_data, int sockfd_ack, FILE *file, const struct sockaddr_in *dest_addr, uint8_t window_size, int mode){
+        uint16_t seq_count_return = 0;
+
+        switch (mode)
+        {
+                case GO_BACK_N_MODE:
+
+                break;
+                case SELETIVE_REPEAT:
+
+                break;
+        default:
+                // Stop and Wait for Default
+                seq_count_return = srtp_send_saw(sockfd_data, sockfd_ack, file, dest_addr, window_size);
+                break;
+        }
+
+        return seq_count_return;
 }
 
 /*
