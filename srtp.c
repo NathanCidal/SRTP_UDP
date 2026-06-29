@@ -4,8 +4,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include "zlib.h"
-#include "srtp.h" // Inclui o seu header para o compilador checar as assinaturas
-
+#include "srtp.h" 
 /*
  * Based on the header data and the payload, generates the data to be send
  * Returns pointer to the data (must free after)
@@ -112,7 +111,6 @@ int srtp_connect(int sockfd, struct sockaddr_in *server_addr, uint8_t window_siz
         struct sockaddr_in from_addr; 
         int len = sizeof(struct sockaddr_in);
 
-        // Monta o cabeçalho seguindo a estrutura de bits deles
         struct srtp_header_t connect_header = {
                 .syn      = 1,
                 .fin      = 0,
@@ -247,7 +245,6 @@ int srtp_send_sr(int sockfd_data, int sockfd_ack, FILE * file, const struct sock
         int n = 0;
         int checksum_b = 0;
 
-        // VAVRIÁVEIS PARA O RELATÓRIO
         struct timeval start_time, end_time;
         unsigned long long total_bytes_sent = 0;
         unsigned long tx_originals = 0;
@@ -441,7 +438,6 @@ int srtp_send_gbn(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
         int n = 0;              
         int checksum_b = 0;     
 
-        // VARIÁVEIS PARA O RELATÓRIO
         struct timeval start_time, end_time;
         unsigned long long total_bytes_sent = 0;
         unsigned long tx_packets = 0;
@@ -581,7 +577,6 @@ int srtp_send_saw(int sockfd_data, int sockfd_ack, FILE * file, const struct soc
         int n = 0;
         int checksum_b = 0;
 
-        // VARIÁVEIS PARA O RELATÓRIO
         struct timeval start_time, end_time;
         unsigned long long total_bytes_sent = 0;
         unsigned long tx_originals = 0;
@@ -767,6 +762,14 @@ int srtp_receive_sr(int sockfd_data, uint16_t port_in, FILE * file_output, struc
         int check = 0;
         int len = sizeof(struct sockaddr_in);
 
+        struct timeval start_time, end_time;
+        unsigned long long rx_bytes_payload = 0;
+        unsigned long long rx_bytes_total = 0;
+        unsigned long rx_packets_in_order = 0;
+        unsigned long rx_duplicates = 0;
+        unsigned long rx_out_of_bounds = 0;
+        gettimeofday(&start_time, NULL);
+
         // SR Buffering Matrix Allocation
         uint8_t ** rx_window = malloc(sizeof(uint8_t *) * window_size);
         for(int i = 0; i < window_size; i++){
@@ -787,6 +790,7 @@ int srtp_receive_sr(int sockfd_data, uint16_t port_in, FILE * file_output, struc
                 check = srtp_checksum(receive_buffer, n);
                 
                 if(check){
+                        rx_bytes_total += n;
                         seq_counter = (receive_buffer[0] & 0x3F) << 8;
                         seq_counter |= receive_buffer[1]; 
 
@@ -803,9 +807,6 @@ int srtp_receive_sr(int sockfd_data, uint16_t port_in, FILE * file_output, struc
                         source_addr->sin_port = htons(port_in + 1);
 
                         if (is_fin) {
-                                #ifdef DEBUG
-                                printf("[SR RECEIVER] FIN frame intercepted. Ending stream processing.\n");
-                                #endif
                                 break;
                         }
 
@@ -823,9 +824,6 @@ int srtp_receive_sr(int sockfd_data, uint16_t port_in, FILE * file_output, struc
                                                 rx_window[buf_idx][j] = receive_buffer[9 + j];
                                         }
                                         rx_filled[buf_idx] = 1;
-                                        #ifdef DEBUG
-                                        printf("[SR RECEIVER] Buffered packet: %d (Window index slot: %d).\n", seq_counter, buf_idx);
-                                        #endif
                                 }
 
                                 // Always ACK the packet individually
@@ -841,10 +839,9 @@ int srtp_receive_sr(int sockfd_data, uint16_t port_in, FILE * file_output, struc
                                         if (rx_sizes[flush_idx] > 0) {
                                                 fwrite(rx_window[flush_idx], 1, rx_sizes[flush_idx], file_output);
                                                 fflush(file_output);
+                                                rx_bytes_payload += rx_sizes[flush_idx];
                                         }
-                                        #ifdef DEBUG
-                                        printf("[SR RECEIVER] Flushed packet %d from buffer to file.\n", file_counter);
-                                        #endif
+                                        rx_packets_in_order++;
                                         
                                         rx_filled[flush_idx] = 0; // Reset slot
                                         last_file_counter = file_counter;
@@ -853,9 +850,7 @@ int srtp_receive_sr(int sockfd_data, uint16_t port_in, FILE * file_output, struc
                         }
                         // Case B: Packet is an old duplicate from a previous window (ACK dropped in transit)
                         else if (((uint16_t)(file_counter - seq_counter) & 0x3FFF) <= window_size) {
-                                #ifdef DEBUG
-                                printf("[SR RECEIVER] Old packet duplicate detected: %d. Re-sending individual ACK.\n", seq_counter);
-                                #endif
+                                rx_duplicates++;
                                 header.ack_flag = 1;
                                 header.ack_num = seq_counter;
                                 response_to_otherside = srtp_data(header, 0);
@@ -864,9 +859,7 @@ int srtp_receive_sr(int sockfd_data, uint16_t port_in, FILE * file_output, struc
                         }
                         // Case C: Completely out of bounds packet, issue NACK for the missing base frame
                         else {
-                                #ifdef DEBUG
-                                printf("[SR RECEIVER] Completely out of bounds frame! Expected base: %d, got: %d. Sending NACK.\n", file_counter, seq_counter);
-                                #endif
+                                rx_out_of_bounds++;
                                 header.nack = 1;
                                 header.ack_num = file_counter;
                                 response_to_otherside = srtp_data(header, 0);
@@ -876,6 +869,22 @@ int srtp_receive_sr(int sockfd_data, uint16_t port_in, FILE * file_output, struc
                 }
         }
 
+        gettimeofday(&end_time, NULL);
+        double duration = (end_time.tv_sec - start_time.tv_sec) + (end_time.tv_usec - start_time.tv_usec) / 1000000.0;
+        double throughput = (rx_bytes_payload / 1024.0) / duration;
+
+        printf("\n====================================================\n");
+        printf("       SRTP RECEIVER REPORT - SELECTIVE REPEAT       \n");
+        printf("====================================================\n");
+        printf("Tempo Total de Recepção    : %.4f segundos\n", duration);
+        printf("Quadros Sequenciados Úteis : %lu\n", rx_packets_in_order);
+        printf("Quadros Duplicados (Recv)  : %lu\n", rx_duplicates);
+        printf("Quadros Fora dos Limites   : %lu\n", rx_out_of_bounds);
+        printf("Volume Gravado (Payload)   : %llu Bytes\n", rx_bytes_payload);
+        printf("Volume Bruto Recebido (UDP): %llu Bytes\n", rx_bytes_total);
+        printf("Throughput de Escrita Útil : %.2f KB/s\n", throughput);
+        printf("====================================================\n\n");
+
         for(int i = 0; i < window_size; i++){
                 free(rx_window[i]);
         }
@@ -884,10 +893,6 @@ int srtp_receive_sr(int sockfd_data, uint16_t port_in, FILE * file_output, struc
         return last_file_counter;
 }
 
-/*
- * SRTP Receive in Go-Back-N (Mode)
- * Returns Last_Seq_Count (used for closing connection later)
- */
 /*
  * SRTP Receive in Go-Back-N (Mode)
  */
@@ -902,6 +907,13 @@ int srtp_receive_gbn(int sockfd_data, uint16_t port_in, FILE * file_output, stru
         int check = 0;
         int len = sizeof(struct sockaddr_in);
 
+        struct timeval start_time, end_time;
+        unsigned long long rx_bytes_payload = 0;
+        unsigned long long rx_bytes_total = 0;
+        unsigned long rx_packets_in_order = 0;
+        unsigned long rx_out_of_order = 0;
+        gettimeofday(&start_time, NULL);
+
         while(1){
                 len = sizeof(struct sockaddr_in);
                 n = recvfrom(sockfd_data, receive_buffer, BUFFER_SIZE, 0, (struct sockaddr *)source_addr, &len);
@@ -910,6 +922,7 @@ int srtp_receive_gbn(int sockfd_data, uint16_t port_in, FILE * file_output, stru
                 check = srtp_checksum(receive_buffer, n);
                 
                 if(check){
+                        rx_bytes_total += n;
                         seq_counter = (receive_buffer[0] & 0x3F) << 8;
                         seq_counter |= receive_buffer[1]; 
 
@@ -930,25 +943,20 @@ int srtp_receive_gbn(int sockfd_data, uint16_t port_in, FILE * file_output, stru
                         source_addr->sin_port = htons(port_in + 1);
 
                         if (is_fin) {
-                                #ifdef DEBUG
-                                printf("[GBN RECEIVER] FIN frame intercepted. Ending stream processing.\n");
-                                #endif
                                 break;
                         }
 
                         // Correct Order File
                         if (seq_counter == file_counter) {
+                                rx_packets_in_order++;
                                 header.ack_flag = 1;
                                 header.nack = 0;
                                 header.ack_num = file_counter;
 
-                                #ifdef DEBUG
-                                printf("[GBN RECEIVER] Packet in order: %d. Writing to file.\n", seq_counter);
-                                #endif
-
                                 if (payload_len > 0) {
                                         fwrite(&receive_buffer[9], 1, payload_len, file_output);
                                         fflush(file_output);
+                                        rx_bytes_payload += payload_len;
                                 }
 
                                 response_to_otherside = srtp_data(header, 0);
@@ -961,16 +969,12 @@ int srtp_receive_gbn(int sockfd_data, uint16_t port_in, FILE * file_output, stru
 
                         // In case of out of order
                         else {
+                                rx_out_of_order++;
                                 uint16_t ultimo_correto = (file_counter == 0) ? 16383 : (file_counter - 1);
 
                                 header.ack_flag = 1; 
                                 header.nack = 0;    
                                 header.ack_num = ultimo_correto; 
-
-                                #ifdef DEBUG
-                                printf("[GBN RECEIVER] Out of order! Expected %d, got %d. Sending ACK duplicate for %d.\n", 
-                                       file_counter, seq_counter, ultimo_correto);
-                                #endif
 
                                 response_to_otherside = srtp_data(header, 0);
                                 sendto(sockfd_data, response_to_otherside, 9, 0, (struct sockaddr *)source_addr, len);
@@ -978,23 +982,45 @@ int srtp_receive_gbn(int sockfd_data, uint16_t port_in, FILE * file_output, stru
                         }
                 }
         }
+
+        gettimeofday(&end_time, NULL);
+        double duration = (end_time.tv_sec - start_time.tv_sec) + (end_time.tv_usec - start_time.tv_usec) / 1000000.0;
+        double throughput = (rx_bytes_payload / 1024.0) / duration;
+
+        printf("\n====================================================\n");
+        printf("       SRTP RECEIVER REPORT - GO-BACK-N              \n");
+        printf("====================================================\n");
+        printf("Tempo Total de Recepção    : %.4f segundos\n", duration);
+        printf("Quadros em Ordem Escritos  : %lu\n", rx_packets_in_order);
+        printf("Quadros Fora de Ordem/Descartados: %lu\n", rx_out_of_order);
+        printf("Volume Gravado (Payload)   : %llu Bytes\n", rx_bytes_payload);
+        printf("Volume Bruto Recebido (UDP): %llu Bytes\n", rx_bytes_total);
+        printf("Throughput de Escrita Útil : %.2f KB/s\n", throughput);
+        printf("====================================================\n\n");
+
         return last_file_counter;
 }
 
 /*
  * Receives in Stop-And-Wait Mode
- * Return Last Seq Count (must have in order to finish communication properly)
  */
 int srtp_receive_saw(int sockfd_data, uint16_t port_in, FILE * file_output, struct sockaddr_in * source_addr, uint8_t window_size){
         uint8_t receive_buffer[BUFFER_SIZE];
         uint16_t file_counter = 0;
-        uint16_t last_file_counter = 0; // Used in SRTP_Close
+        uint16_t last_file_counter = 0; 
         uint16_t seq_counter = 0;
 
         uint8_t * response_to_otherside;
         int n = 0;
         int check = 0;
         int len = sizeof(struct sockaddr_in);
+
+        struct timeval start_time, end_time;
+        unsigned long long rx_bytes_payload = 0;
+        unsigned long long rx_bytes_total = 0;
+        unsigned long rx_packets_in_order = 0;
+        unsigned long rx_duplicates = 0;
+        gettimeofday(&start_time, NULL);
 
         while(1){
                 len = sizeof(struct sockaddr_in);
@@ -1004,6 +1030,7 @@ int srtp_receive_saw(int sockfd_data, uint16_t port_in, FILE * file_output, stru
                 check = srtp_checksum(receive_buffer, n);
                 
                 if(check){
+                        rx_bytes_total += n;
                         seq_counter = (receive_buffer[0] & 0x3F) << 8;
                         seq_counter |= receive_buffer[1]; 
 
@@ -1014,7 +1041,7 @@ int srtp_receive_saw(int sockfd_data, uint16_t port_in, FILE * file_output, stru
                                 .nack = 0,
                                 .ack_flag = 0,
                                 .ack_num = seq_counter,
-                                .length = 0,    // Lenght == 0 since its only an ACK with no payload
+                                .length = 0,    
                                 .crc32 = 0 
                         };
 
@@ -1031,14 +1058,16 @@ int srtp_receive_saw(int sockfd_data, uint16_t port_in, FILE * file_output, stru
 
                         // Correct Send Process
                         if((file_counter) == seq_counter){
+                                rx_packets_in_order++;
                                 header.ack_flag = 1;
 
                                 if(payload_len > 0){
                                         fwrite(&receive_buffer[9], 1, payload_len, file_output);
                                         fflush(file_output);
+                                        rx_bytes_payload += payload_len;
                                 }
 
-                                response_to_otherside = srtp_data(header, 0); //No Payload since its a response
+                                response_to_otherside = srtp_data(header, 0); 
                                 sendto(sockfd_data, response_to_otherside, 9, 0, (struct sockaddr *)source_addr, len);
                                 free(response_to_otherside);
 
@@ -1047,18 +1076,33 @@ int srtp_receive_saw(int sockfd_data, uint16_t port_in, FILE * file_output, stru
                                 file_counter++;
                                 if(file_counter > 16383) file_counter = 0;
                         }else{
-                                // Correct CRC, but with it being out of order or repeated, just sends ACK and continue (without increasing order)
+                                rx_duplicates++;
                                 header.ack_flag = 1;
 
-                                response_to_otherside = srtp_data(header, 0); //No Payload since its a response
+                                response_to_otherside = srtp_data(header, 0); 
                                 sendto(sockfd_data, response_to_otherside, 9, 0, (struct sockaddr *)source_addr, len);
                                 free(response_to_otherside);
                         }
                 }
         }
+
+        gettimeofday(&end_time, NULL);
+        double duration = (end_time.tv_sec - start_time.tv_sec) + (end_time.tv_usec - start_time.tv_usec) / 1000000.0;
+        double throughput = (rx_bytes_payload / 1024.0) / duration;
+
+        printf("\n====================================================\n");
+        printf("       SRTP RECEIVER REPORT - STOP-AND-WAIT          \n");
+        printf("====================================================\n");
+        printf("Tempo Total de Recepção    : %.4f segundos\n", duration);
+        printf("Quadros em Ordem Recebidos : %lu\n", rx_packets_in_order);
+        printf("Quadros Duplicados Re-ACK  : %lu\n", rx_duplicates);
+        printf("Volume Gravado (Payload)   : %llu Bytes\n", rx_bytes_payload);
+        printf("Volume Bruto Recebido (UDP): %llu Bytes\n", rx_bytes_total);
+        printf("Throughput de Escrita Útil : %.2f KB/s\n", throughput);
+        printf("====================================================\n\n");
+
         return last_file_counter;
 }
-
 /* 
  * API Function used to receive FILE from another Host (and to write in a output file)
  * Works as a Wrapper
